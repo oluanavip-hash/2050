@@ -1,0 +1,53 @@
+import { supabase } from "@/integrations/supabase/client";
+import { robots as robotDetails } from "@/data/robots";
+
+export const getAchievementsProgress = async (userId: string) => {
+  // Fetch all investments (active and completed)
+  const { data: investments, error: investmentsError } = await supabase
+    .from('investments')
+    .select('robot_id, amount, start_date, end_date, progress_override')
+    .eq('user_id', userId);
+
+  // Fetch all referral bonuses
+  const { data: bonuses, error: bonusesError } = await supabase
+    .from('referral_bonuses')
+    .select('amount')
+    .eq('user_id', userId);
+
+  if (investmentsError || bonusesError) {
+    console.error("Error fetching achievements data:", { investmentsError, bonusesError });
+    throw new Error("Failed to fetch achievements progress.");
+  }
+
+  // Calculate total profit from investments
+  const investmentProfits = investments.reduce((total, inv) => {
+    const robot = robotDetails.find(r => r.id === inv.robot_id);
+    if (!robot) return total;
+
+    const startDate = new Date(inv.start_date);
+    const endDate = new Date(inv.end_date);
+    const now = new Date();
+
+    const totalDuration = (endDate.getTime() - startDate.getTime());
+    const elapsedDuration = (now.getTime() - startDate.getTime());
+    
+    // Use o override se existir, senão calcule pelo tempo
+    const calculatedProgress = totalDuration > 0 ? Math.min(elapsedDuration / totalDuration, 1) : 1;
+    const finalProgress = inv.progress_override != null ? inv.progress_override / 100 : calculatedProgress;
+    
+    const netInvestment = inv.amount * (1 - robot.transactionFee);
+    const totalPossibleProfit = netInvestment * (robot.totalReturn / 100);
+    
+    const currentProfit = totalPossibleProfit * finalProgress;
+
+    return total + currentProfit;
+  }, 0);
+
+  // Calculate total earnings from bonuses
+  const bonusEarnings = bonuses.reduce((total, bonus) => total + bonus.amount, 0);
+
+  // Total faturamento is the sum of all profits and bonuses
+  const totalFaturamento = investmentProfits + bonusEarnings;
+
+  return { totalFaturamento };
+};

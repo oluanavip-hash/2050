@@ -1,0 +1,35 @@
+import { NavLink } from "react-router-dom";
+import { Bot, Users, Wallet, Percent, Trophy } from "lucide-react";
+import { cn } from "@/lib/utils";
+
+const navItems = [
+  { to: "/app/home", icon: Bot, label: "Robôs" },
+  { to: "/app/achievements", icon: Trophy, label: "Conquistas" },
+  { to: "/app/affiliates", icon: Users, label: "Afiliados" },
+  { to: "/app/reports", icon: Percent, label: "Taxas" },
+  { to: "/app/wallet", icon: Wallet, label: "Carteira" },
+];
+
+export const BottomNav = () => {
+  return (
+    <nav className="fixed bottom-0 left-0 right-0 bg-card border-t border-border/50 h-16 z-20">
+      <div className="grid h-full max-w-lg grid-cols-5 mx-auto font-medium">
+        {navItems.map((item) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            className={({ isActive }) =>
+              cn(
+                "inline-flex flex-col items-center justify-center px-5 hover:bg-secondary/50 group",
+                isActive ? "text-primary" : "text-muted-foreground"
+              )
+            }
+          >
+            <item.icon className="w-5 h-5 mb-1" />
+            <span className="text-xs">{item.label}</span>
+          </NavLink>
+        ))}
+      </div>
+    </nav>
+  );
+};

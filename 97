@@ -1,0 +1,56 @@
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ArrowDownLeft, ArrowUpRight, Bot, Gift } from "lucide-react";
+import { Transaction } from "@/services/walletService";
+
+const iconMap: { [key: string]: { icon: React.ElementType; color: string } } = {
+  'Depósito': { icon: ArrowDownLeft, color: 'text-green-500' },
+  'Saque': { icon: ArrowUpRight, color: 'text-red-500' },
+  'Investimento': { icon: Bot, color: 'text-yellow-500' },
+  'Bônus': { icon: Gift, color: 'text-blue-400' },
+};
+
+interface TransactionHistoryProps {
+  transactions: Transaction[];
+}
+
+export const TransactionHistory = ({ transactions }: TransactionHistoryProps) => {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Histórico de Transações</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {transactions.length > 0 ? (
+          <div className="space-y-4">
+            {transactions.map(tx => {
+              const isStandardType = ['Depósito', 'Saque', 'Bônus'].includes(tx.type);
+              const isInvestment = !isStandardType;
+              const iconKey = isInvestment ? 'Investimento' : tx.type;
+              const { icon: Icon, color } = iconMap[iconKey];
+              
+              const isNegative = tx.type === 'Saque' || isInvestment;
+              const amountColor = isNegative ? 'text-red-500' : 'text-green-500';
+
+              return (
+                <div key={tx.id} className="flex items-center">
+                  <div className={`p-2 bg-secondary rounded-full mr-4 ${color}`}>
+                    <Icon className="w-5 h-5" />
+                  </div>
+                  <div className="flex-grow">
+                    <p className="font-semibold">{tx.type}</p>
+                    <p className="text-xs text-muted-foreground">{new Date(tx.date).toLocaleString('pt-BR')}</p>
+                  </div>
+                  <div className={`font-semibold ${amountColor}`}>
+                    {tx.amount > 0 && !isNegative ? '+' : ''}R$ {tx.amount.toFixed(2)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-center text-muted-foreground py-4">Nenhuma transação encontrada.</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+};

@@ -1,0 +1,19 @@
+DO $$
+DECLARE
+    target_user_id UUID;
+BEGIN
+    -- Encontrar o user_id para o email especificado
+    SELECT id INTO target_user_id FROM auth.users WHERE email = 'wenderbryon2@hotmail.com';
+
+    -- Verificar se o usuário foi encontrado antes de inserir
+    IF target_user_id IS NOT NULL THEN
+        -- Inserir o depósito na tabela public.deposits
+        -- O gatilho 'update_balance_on_deposit' irá atualizar o saldo na tabela 'profiles' automaticamente.
+        INSERT INTO public.deposits (user_id, amount, status, created_at, updated_at)
+        VALUES (target_user_id, 3000.00, 'completed', '2025-09-30 01:15:25+00', '2025-09-30 01:15:25+00');
+        
+        RAISE NOTICE 'Depósito de R$ 3000,00 adicionado para o usuário %', target_user_id;
+    ELSE
+        RAISE WARNING 'Usuário com email wenderbryon2@hotmail.com não encontrado.';
+    END IF;
+END $$;

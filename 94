@@ -1,0 +1,30 @@
+import { useState } from "react";
+import { RobotCarousel } from "@/components/RobotCarousel";
+import { RobotModal } from "@/components/RobotModal";
+import { Robot } from "@/data/robots";
+
+const HomePage = () => {
+  const [showRobotModal, setShowRobotModal] = useState(false);
+  const [selectedRobot, setSelectedRobot] = useState<Robot | null>(null);
+
+  const handleRobotClick = (robot: Robot) => {
+    setSelectedRobot(robot);
+    setShowRobotModal(true);
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-2xl font-semibold mb-4">Robôs Disponíveis</h2>
+        <RobotCarousel onRobotClick={handleRobotClick} />
+      </div>
+      <RobotModal
+        open={showRobotModal}
+        onOpenChange={setShowRobotModal}
+        robot={selectedRobot}
+      />
+    </div>
+  );
+};
+
+export default HomePage;

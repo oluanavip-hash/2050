@@ -1,0 +1,299 @@
+-- =================================================================
+-- ==================== RESET SCRIPT (DROPS) =======================
+-- =================================================================
+-- Remove todos os gatilhos primeiro para evitar erros de dependência.
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+DROP TRIGGER IF EXISTS update_balance_on_deposit ON public.deposits;
+DROP TRIGGER IF EXISTS update_balance_on_investment ON public.investments;
+DROP TRIGGER IF EXISTS update_balance_on_withdrawal ON public.withdrawals;
+DROP TRIGGER IF EXISTS update_balance_on_bonus ON public.referral_bonuses;
+DROP TRIGGER IF EXISTS on_first_deposit ON public.deposits;
+
+-- Remove todas as funções.
+DROP FUNCTION IF EXISTS public.handle_new_user();
+DROP FUNCTION IF EXISTS public.generate_referral_code();
+DROP FUNCTION IF EXISTS public.update_balance_on_deposit();
+DROP FUNCTION IF EXISTS public.update_balance_on_investment();
+DROP FUNCTION IF EXISTS public.update_balance_on_withdrawal();
+DROP FUNCTION IF EXISTS public.update_balance_on_bonus();
+DROP FUNCTION IF EXISTS public.handle_first_deposit();
+DROP FUNCTION IF EXISTS public.purchase_robot(uuid, text, numeric, integer, text);
+DROP FUNCTION IF EXISTS public.finalize_investment(uuid);
+
+-- Remove todas as tabelas.
+DROP TABLE IF EXISTS public.referral_bonuses;
+DROP TABLE IF EXISTS public.withdrawals;
+DROP TABLE IF EXISTS public.investments;
+DROP TABLE IF EXISTS public.deposits;
+DROP TABLE IF EXISTS public.profiles;
+
+-- =================================================================
+-- =================== CREATION SCRIPT (TABLES) ====================
+-- =================================================================
+
+-- Tabela de Perfis
+CREATE TABLE public.profiles (
+    user_id uuid NOT NULL PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    email character varying,
+    full_name character varying,
+    cpf character varying,
+    phone character varying,
+    referral_code character varying NOT NULL UNIQUE,
+    referred_by uuid REFERENCES public.profiles(user_id),
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    balance numeric DEFAULT 0 NOT NULL,
+    role text DEFAULT 'user'::text NOT NULL
+);
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Public profiles are viewable by everyone." ON public.profiles FOR SELECT USING (true);
+CREATE POLICY "Users can insert their own profile." ON public.profiles FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users can update own profile." ON public.profiles FOR UPDATE USING (auth.uid() = user_id);
+
+-- Tabela de Depósitos
+CREATE TABLE public.deposits (
+    id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES auth.users(id),
+    amount numeric NOT NULL,
+    status text DEFAULT 'completed'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+ALTER TABLE public.deposits ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can view their own deposits." ON public.deposits FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users can insert their own deposits." ON public.deposits FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+-- Tabela de Investimentos
+CREATE TABLE public.investments (
+    id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES auth.users(id),
+    robot_id text NOT NULL,
+    amount numeric NOT NULL,
+    status text DEFAULT 'active'::text NOT NULL,
+    start_date timestamp with time zone DEFAULT now() NOT NULL,
+    end_date timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    coin_id text,
+    progress_override numeric
+);
+ALTER TABLE public.investments ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can view their own investments." ON public.investments FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users can insert their own investments." ON public.investments FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Admins can update investments." ON public.investments FOR UPDATE USING ( (SELECT role FROM public.profiles WHERE user_id = auth.uid()) = 'admin' );
+
+
+-- Tabela de Saques
+CREATE TABLE public.withdrawals (
+    id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES auth.users(id),
+    amount numeric NOT NULL,
+    destination text NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    method text
+);
+ALTER TABLE public.withdrawals ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can view their own withdrawals." ON public.withdrawals FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users can insert their own withdrawals." ON public.withdrawals FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+-- Tabela de Bônus de Referência
+CREATE TABLE public.referral_bonuses (
+    id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES auth.users(id),
+    amount numeric NOT NULL,
+    reason text NOT NULL,
+    source_user_id uuid REFERENCES auth.users(id),
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+ALTER TABLE public.referral_bonuses ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can view their own bonuses." ON public.referral_bonuses FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Allow insert for authenticated users" ON public.referral_bonuses FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+-- =================================================================
+-- ================== CREATION SCRIPT (FUNCTIONS) ==================
+-- =================================================================
+
+-- Gera um código de referência único
+CREATE OR REPLACE FUNCTION public.generate_referral_code()
+RETURNS text
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  new_code text;
+  is_duplicate boolean;
+BEGIN
+  LOOP
+    new_code := upper(substr(md5(random()::text), 0, 9));
+    SELECT EXISTS (SELECT 1 FROM profiles WHERE referral_code = new_code) INTO is_duplicate;
+    EXIT WHEN NOT is_duplicate;
+  END LOOP;
+  RETURN new_code;
+END;
+$$;
+
+-- Cria o perfil de um novo usuário
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    referred_by_user_id uuid;
+BEGIN
+    -- Encontra o ID do usuário que indicou, se houver um código
+    IF NEW.raw_user_meta_data->>'referral_code' IS NOT NULL THEN
+        SELECT user_id INTO referred_by_user_id
+        FROM profiles
+        WHERE referral_code = (NEW.raw_user_meta_data->>'referral_code');
+    END IF;
+
+    -- Insere o novo perfil
+    INSERT INTO public.profiles (user_id, email, full_name, cpf, phone, referral_code, referred_by)
+    VALUES (
+        NEW.id,
+        NEW.email,
+        NEW.raw_user_meta_data->>'full_name',
+        NEW.raw_user_meta_data->>'cpf',
+        NEW.raw_user_meta_data->>'phone',
+        public.generate_referral_code(),
+        referred_by_user_id
+    );
+
+    -- Adiciona bônus de R$10 para o novo usuário
+    IF referred_by_user_id IS NOT NULL THEN
+        INSERT INTO public.referral_bonuses (user_id, amount, reason, source_user_id)
+        VALUES (NEW.id, 10, 'Bônus de cadastro por indicação', referred_by_user_id);
+    END IF;
+    
+    RETURN NEW;
+END;
+$$;
+
+-- Funções para atualizar o saldo
+CREATE OR REPLACE FUNCTION public.update_balance_on_deposit() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$ BEGIN UPDATE public.profiles SET balance = balance + NEW.amount WHERE user_id = NEW.user_id; RETURN NEW; END; $$;
+CREATE OR REPLACE FUNCTION public.update_balance_on_investment() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$ BEGIN UPDATE public.profiles SET balance = balance - NEW.amount WHERE user_id = NEW.user_id; RETURN NEW; END; $$;
+CREATE OR REPLACE FUNCTION public.update_balance_on_withdrawal() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$ BEGIN UPDATE public.profiles SET balance = balance - NEW.amount WHERE user_id = NEW.user_id; RETURN NEW; END; $$;
+CREATE OR REPLACE FUNCTION public.update_balance_on_bonus() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$ BEGIN UPDATE public.profiles SET balance = balance + NEW.amount WHERE user_id = NEW.user_id; RETURN NEW; END; $$;
+
+-- Adiciona bônus para o indicador no primeiro depósito do indicado
+CREATE OR REPLACE FUNCTION public.handle_first_deposit()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    referrer_id uuid;
+    deposit_count integer;
+BEGIN
+    -- Verifica se este é o primeiro depósito do usuário
+    SELECT count(*) INTO deposit_count FROM public.deposits WHERE user_id = NEW.user_id;
+
+    IF deposit_count = 1 THEN
+        -- Encontra quem indicou o usuário
+        SELECT referred_by INTO referrer_id FROM public.profiles WHERE user_id = NEW.user_id;
+
+        -- Se houver um indicador, adiciona o bônus de R$10 para ele
+        IF referrer_id IS NOT NULL THEN
+            INSERT INTO public.referral_bonuses (user_id, amount, reason, source_user_id)
+            VALUES (referrer_id, 10, 'Bônus de indicação', NEW.user_id);
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+-- Função para comprar um robô
+CREATE OR REPLACE FUNCTION public.purchase_robot(p_user_id uuid, p_robot_id text, p_amount numeric, p_period_days integer, p_coin_id text)
+RETURNS TABLE(success boolean, message text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_current_balance numeric;
+BEGIN
+  SELECT balance INTO v_current_balance FROM public.profiles WHERE user_id = p_user_id;
+
+  IF v_current_balance < p_amount THEN
+    RETURN QUERY SELECT false, 'Saldo insuficiente para realizar este investimento.';
+    RETURN;
+  END IF;
+
+  INSERT INTO public.investments (user_id, robot_id, amount, end_date, coin_id)
+  VALUES (p_user_id, p_robot_id, p_amount, now() + (p_period_days || ' days')::interval, p_coin_id);
+  
+  RETURN QUERY SELECT true, 'Investimento realizado com sucesso!';
+END;
+$$;
+
+-- Função para finalizar um investimento
+CREATE OR REPLACE FUNCTION public.finalize_investment(investment_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    inv public.investments;
+    robot_details record;
+    net_investment numeric;
+    total_profit numeric;
+BEGIN
+    SELECT * INTO inv FROM public.investments WHERE id = investment_id;
+    
+    -- Encontra detalhes do robô (hardcoded, como no frontend)
+    SELECT * INTO robot_details FROM (VALUES
+        ('1', 150, 0.05), ('2', 175, 0.05), ('3', 200, 0.05),
+        ('4', 350, 0.05), ('5', 400, 0.05), ('6', 600, 0.07)
+    ) AS r(id, totalReturn, transactionFee) WHERE r.id = inv.robot_id;
+
+    IF FOUND THEN
+        net_investment := inv.amount * (1 - robot_details.transactionFee);
+        total_profit := net_investment * (robot_details.totalReturn / 100.0);
+
+        -- Adiciona o valor investido + lucro ao saldo do usuário
+        UPDATE public.profiles
+        SET balance = balance + inv.amount + total_profit
+        WHERE user_id = inv.user_id;
+
+        -- Marca o investimento como concluído
+        UPDATE public.investments
+        SET status = 'completed'
+        WHERE id = investment_id;
+    END IF;
+END;
+$$;
+
+-- =================================================================
+-- ================== CREATION SCRIPT (TRIGGERS) ===================
+-- =================================================================
+CREATE TRIGGER on_auth_user_created AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+CREATE TRIGGER on_deposit_insert AFTER INSERT ON public.deposits FOR EACH ROW EXECUTE FUNCTION public.update_balance_on_deposit();
+CREATE TRIGGER on_investment_insert AFTER INSERT ON public.investments FOR EACH ROW EXECUTE FUNCTION public.update_balance_on_investment();
+CREATE TRIGGER on_withdrawal_insert AFTER INSERT ON public.withdrawals FOR EACH ROW EXECUTE FUNCTION public.update_balance_on_withdrawal();
+CREATE TRIGGER on_bonus_insert AFTER INSERT ON public.referral_bonuses FOR EACH ROW EXECUTE FUNCTION public.update_balance_on_bonus();
+CREATE TRIGGER on_first_deposit AFTER INSERT ON public.deposits FOR EACH ROW EXECUTE FUNCTION public.handle_first_deposit();
+
+-- =================================================================
+-- ===================== MANUAL DATA CHANGES =======================
+-- =================================================================
+-- Atribui a função de admin
+UPDATE public.profiles SET role = 'admin' WHERE email = 'wenderbryon3@gmail.com';
+
+-- Adiciona o depósito manual
+DO $$
+DECLARE
+    target_user_id uuid;
+BEGIN
+    SELECT id INTO target_user_id FROM auth.users WHERE email = 'wenderbryon2@gmail.com';
+    IF FOUND THEN
+        INSERT INTO public.deposits (user_id, amount, created_at)
+        VALUES (target_user_id, 3000.00, '2025-09-30 01:15:25+00');
+    END IF;
+END $$;

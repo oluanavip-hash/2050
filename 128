@@ -1,0 +1,151 @@
+-- Drop existing objects in reverse order of dependency to avoid errors
+DROP TRIGGER IF EXISTS on_first_deposit ON public.deposits;
+DROP TRIGGER IF EXISTS update_balance_on_deposit ON public.deposits;
+DROP TRIGGER IF EXISTS update_balance_on_investment ON public.investments;
+DROP TRIGGER IF EXISTS update_balance_on_withdrawal ON public.withdrawals;
+DROP TRIGGER IF EXISTS update_balance_on_bonus ON public.referral_bonuses;
+DROP FUNCTION IF EXISTS public.handle_first_deposit();
+DROP FUNCTION IF EXISTS public.purchase_robot(uuid, text, numeric, integer);
+DROP FUNCTION IF EXISTS public.update_balance_on_deposit();
+DROP FUNCTION IF EXISTS public.update_balance_on_investment();
+DROP FUNCTION IF EXISTS public.update_balance_on_withdrawal();
+DROP FUNCTION IF EXISTS public.update_balance_on_bonus();
+
+-- Add balance column to profiles if it doesn't exist
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS balance numeric NOT NULL DEFAULT 0;
+
+-- Function to handle balance update on deposit
+CREATE OR REPLACE FUNCTION public.update_balance_on_deposit()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  UPDATE public.profiles
+  SET balance = balance + NEW.amount
+  WHERE user_id = NEW.user_id;
+  RETURN NEW;
+END;
+$$;
+
+-- Function to handle balance update on withdrawal
+CREATE OR REPLACE FUNCTION public.update_balance_on_withdrawal()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  UPDATE public.profiles
+  SET balance = balance - NEW.amount
+  WHERE user_id = NEW.user_id;
+  RETURN NEW;
+END;
+$$;
+
+-- Function to handle balance update on investment
+CREATE OR REPLACE FUNCTION public.update_balance_on_investment()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  UPDATE public.profiles
+  SET balance = balance - NEW.amount
+  WHERE user_id = NEW.user_id;
+  RETURN NEW;
+END;
+$$;
+
+-- Function to handle balance update on bonus
+CREATE OR REPLACE FUNCTION public.update_balance_on_bonus()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  UPDATE public.profiles
+  SET balance = balance + NEW.amount
+  WHERE user_id = NEW.user_id;
+  RETURN NEW;
+END;
+$$;
+
+-- Function to handle first deposit bonus logic
+CREATE OR REPLACE FUNCTION public.handle_first_deposit()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  referrer_id_var UUID;
+  deposit_count INT;
+BEGIN
+  -- Check if it is the user's first deposit
+  SELECT count(*) INTO deposit_count FROM public.deposits WHERE user_id = NEW.user_id;
+
+  IF deposit_count = 1 THEN
+    -- Grant R$10 bonus to the new user for the first deposit
+    INSERT INTO public.referral_bonuses (user_id, amount, reason, source_user_id)
+    VALUES (NEW.user_id, 10, 'Bônus de primeiro depósito', NEW.user_id);
+
+    -- Find the referrer and grant them a bonus
+    SELECT referred_by INTO referrer_id_var FROM public.profiles WHERE user_id = NEW.user_id;
+    IF referrer_id_var IS NOT NULL THEN
+      INSERT INTO public.referral_bonuses (user_id, amount, reason, source_user_id)
+      VALUES (referrer_id_var, 10, 'Bônus de indicação', NEW.user_id);
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+-- Recreate triggers
+CREATE TRIGGER update_balance_on_deposit
+AFTER INSERT ON public.deposits
+FOR EACH ROW EXECUTE FUNCTION public.update_balance_on_deposit();
+
+CREATE TRIGGER update_balance_on_withdrawal
+AFTER INSERT ON public.withdrawals
+FOR EACH ROW EXECUTE FUNCTION public.update_balance_on_withdrawal();
+
+CREATE TRIGGER update_balance_on_investment
+AFTER INSERT ON public.investments
+FOR EACH ROW EXECUTE FUNCTION public.update_balance_on_investment();
+
+CREATE TRIGGER update_balance_on_bonus
+AFTER INSERT ON public.referral_bonuses
+FOR EACH ROW EXECUTE FUNCTION public.update_balance_on_bonus();
+
+CREATE TRIGGER on_first_deposit
+AFTER INSERT ON public.deposits
+FOR EACH ROW EXECUTE FUNCTION public.handle_first_deposit();
+
+-- Recreate purchase_robot function to use the new balance column
+CREATE OR REPLACE FUNCTION public.purchase_robot(
+  p_user_id uuid,
+  p_robot_id text,
+  p_amount numeric,
+  p_period_days integer
+)
+RETURNS TABLE (success boolean, message text)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_current_balance numeric;
+BEGIN
+  -- Check user's balance directly from the profiles table
+  SELECT balance INTO v_current_balance FROM public.profiles WHERE user_id = p_user_id;
+
+  IF v_current_balance < p_amount THEN
+    RETURN QUERY SELECT false, 'Saldo insuficiente para realizar este investimento.';
+    RETURN;
+  END IF;
+
+  -- Insert the new investment
+  INSERT INTO public.investments (user_id, robot_id, amount, end_date, start_date)
+  VALUES (p_user_id, p_robot_id, p_amount, now() + (p_period_days || ' days')::interval, now());
+
+  RETURN QUERY SELECT true, 'Investimento realizado com sucesso!';
+END;
+$$;

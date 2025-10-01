@@ -1,0 +1,228 @@
+-- Drop existing triggers and functions to recreate them in the correct order and with correct permissions.
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+DROP TRIGGER IF EXISTS on_first_deposit ON public.deposits;
+DROP TRIGGER IF EXISTS update_balance_on_deposit ON public.deposits;
+DROP TRIGGER IF EXISTS update_balance_on_investment ON public.investments;
+DROP TRIGGER IF EXISTS update_balance_on_withdrawal ON public.withdrawals;
+DROP TRIGGER IF EXISTS update_balance_on_bonus ON public.referral_bonuses;
+
+DROP FUNCTION IF EXISTS public.handle_new_user();
+DROP FUNCTION IF EXISTS public.generate_referral_code();
+DROP FUNCTION IF EXISTS public.handle_first_deposit();
+DROP FUNCTION IF EXISTS public.update_balance_on_deposit();
+DROP FUNCTION IF EXISTS public.update_balance_on_investment();
+DROP FUNCTION IF EXISTS public.update_balance_on_withdrawal();
+DROP FUNCTION IF EXISTS public.update_balance_on_bonus();
+DROP FUNCTION IF EXISTS public.purchase_robot(uuid, text, numeric, integer);
+
+-- Function to generate a unique referral code
+create or replace function public.generate_referral_code()
+returns text
+language plpgsql
+as $$
+declare
+  v_code text;
+  v_is_unique boolean;
+begin
+  loop
+    v_code := upper(substr(md5(random()::text), 0, 7)); -- 6-character random code
+    select not exists(select 1 from public.profiles where referral_code = v_code) into v_is_unique;
+    exit when v_is_unique;
+  end loop;
+  return v_code;
+end;
+$$;
+
+-- Function to create a profile for a new user, assign referral code and bonus if applicable
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer -- Changed to definer to handle referral logic securely
+set search_path = public
+as $$
+declare
+  referrer_id uuid;
+  new_referral_code text;
+begin
+  -- Generate a unique referral code for the new user
+  new_referral_code := public.generate_referral_code();
+
+  -- Find the referrer's user_id from the provided referral_code
+  if new.raw_user_meta_data->>'referral_code' is not null then
+    select user_id into referrer_id
+    from public.profiles
+    where referral_code = upper(new.raw_user_meta_data->>'referral_code');
+  end if;
+
+  -- Insert new profile
+  insert into public.profiles (user_id, email, full_name, cpf, phone, referred_by, referral_code, balance)
+  values (
+    new.id,
+    new.email,
+    new.raw_user_meta_data->>'full_name',
+    new.raw_user_meta_data->>'cpf',
+    new.raw_user_meta_data->>'phone',
+    referrer_id,
+    new_referral_code,
+    0 -- Initial balance
+  );
+
+  -- If the user was referred, grant them a signup bonus
+  if referrer_id is not null then
+    insert into public.referral_bonuses (user_id, amount, reason, source_user_id)
+    values (new.id, 10, 'Bônus de cadastro por indicação', referrer_id);
+  end if;
+
+  return new;
+end;
+$$;
+
+-- Trigger for new user creation
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
+
+-- Balance update functions (SECURITY INVOKER to respect RLS of the calling trigger)
+create or replace function public.update_balance_on_deposit()
+returns trigger
+language plpgsql
+security invoker -- IMPORTANT: Runs with the role that fired the trigger
+as $$
+begin
+  update public.profiles
+  set balance = balance + NEW.amount
+  where user_id = NEW.user_id;
+  return NEW;
+end;
+$$;
+
+create or replace function public.update_balance_on_investment()
+returns trigger
+language plpgsql
+security invoker
+as $$
+begin
+  update public.profiles
+  set balance = balance - NEW.amount
+  where user_id = NEW.user_id;
+  return NEW;
+end;
+$$;
+
+create or replace function public.update_balance_on_withdrawal()
+returns trigger
+language plpgsql
+security invoker
+as $$
+begin
+  if (TG_OP = 'INSERT' AND NEW.status = 'pending') then
+      update public.profiles
+      set balance = balance - NEW.amount
+      where user_id = NEW.user_id;
+  end if;
+  return NEW;
+end;
+$$;
+
+create or replace function public.update_balance_on_bonus()
+returns trigger
+language plpgsql
+security invoker
+as $$
+begin
+  update public.profiles
+  set balance = balance + NEW.amount
+  where user_id = NEW.user_id;
+  return NEW;
+end;
+$$;
+
+-- Function to handle first deposit bonus
+create or replace function public.handle_first_deposit()
+returns trigger
+language plpgsql
+security definer -- Must be definer to query other users' data (referrer)
+set search_path = public
+as $$
+declare
+  v_deposit_count integer;
+  v_referrer_id uuid;
+begin
+  select count(*) into v_deposit_count from public.deposits where user_id = NEW.user_id;
+
+  if v_deposit_count = 1 then
+    insert into public.referral_bonuses (user_id, amount, reason)
+    values (NEW.user_id, 10, 'Bônus de primeiro depósito');
+
+    select referred_by into v_referrer_id from public.profiles where user_id = NEW.user_id;
+    if v_referrer_id is not null then
+      insert into public.referral_bonuses (user_id, amount, reason, source_user_id)
+      values (v_referrer_id, 10, 'Bônus de indicação', NEW.user_id);
+    end if;
+  end if;
+
+  return NEW;
+end;
+$$;
+
+-- Triggers to update balance (SECURITY DEFINER to invoke the SECURITY INVOKER functions)
+create trigger update_balance_on_deposit
+  after insert on public.deposits for each row execute function public.update_balance_on_deposit();
+
+create trigger update_balance_on_investment
+  after insert on public.investments for each row execute function public.update_balance_on_investment();
+
+create trigger update_balance_on_withdrawal
+  after insert or update on public.withdrawals for each row execute function public.update_balance_on_withdrawal();
+
+create trigger update_balance_on_bonus
+  after insert on public.referral_bonuses for each row execute function public.update_balance_on_bonus();
+
+create trigger on_first_deposit
+  after insert on public.deposits for each row execute function public.handle_first_deposit();
+
+-- RLS Policies for profiles update
+-- Allow users to update their own profiles
+drop policy if exists "Usuários podem atualizar seus próprios perfis" on public.profiles;
+create policy "Usuários podem atualizar seus próprios perfis"
+  on public.profiles for update
+  using ( auth.uid() = user_id )
+  with check ( auth.uid() = user_id );
+
+-- Allow backend processes (like triggers) to update balance
+drop policy if exists "Permitir atualização de saldo pelos triggers" on public.profiles;
+create policy "Permitir atualização de saldo pelos triggers"
+  on public.profiles for update
+  to service_role -- The role used by triggers
+  using (true)
+  with check (true);
+
+-- Final version of purchase_robot function
+create or replace function public.purchase_robot(
+  p_user_id uuid,
+  p_robot_id text,
+  p_amount numeric,
+  p_period_days integer
+)
+returns table (success boolean, message text)
+security definer
+set search_path = public
+language plpgsql
+as $$
+declare
+  v_current_balance numeric;
+begin
+  select balance into v_current_balance from public.profiles where user_id = p_user_id;
+
+  if v_current_balance is null or v_current_balance < p_amount then
+    return query select false, 'Saldo insuficiente para realizar este investimento.';
+    return;
+  end if;
+
+  insert into public.investments (user_id, robot_id, amount, end_date)
+  values (p_user_id, p_robot_id, p_amount, now() + (p_period_days || ' days')::interval);
+
+  return query select true, 'Investimento realizado com sucesso!';
+end;
+$$;
+</sql>

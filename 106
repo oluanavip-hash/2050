@@ -1,0 +1,39 @@
+/*
+# [SECURITY] Fix Function Search Path
+This migration secures existing database functions by explicitly setting their `search_path`. This prevents potential security vulnerabilities where a function could be tricked into executing code from an unintended schema. This addresses the "Function Search Path Mutable" security advisory.
+
+## Query Description:
+This operation alters the configuration of three functions: `handle_new_user`, `handle_first_deposit`, and `purchase_robot`. It adds `SET search_path = 'public'` to each function's definition. This change is safe, does not affect existing data, and improves the security and stability of your database.
+
+## Metadata:
+- Schema-Category: "Structural"
+- Impact-Level: "Low"
+- Requires-Backup: false
+- Reversible: true
+
+## Structure Details:
+- Functions affected:
+  - public.handle_new_user()
+  - public.handle_first_deposit()
+  - public.purchase_robot(text, numeric)
+
+## Security Implications:
+- RLS Status: Unchanged
+- Policy Changes: No
+- Auth Requirements: None
+- Mitigates: "Function Search Path Mutable" security advisory.
+
+## Performance Impact:
+- Indexes: None
+- Triggers: None
+- Estimated Impact: Negligible.
+*/
+
+-- Secure the handle_new_user function
+ALTER FUNCTION public.handle_new_user() SET search_path = 'public';
+
+-- Secure the handle_first_deposit function
+ALTER FUNCTION public.handle_first_deposit() SET search_path = 'public';
+
+-- Secure the purchase_robot function
+ALTER FUNCTION public.purchase_robot(text, numeric) SET search_path = 'public';

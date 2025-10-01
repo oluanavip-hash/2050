@@ -1,0 +1,136 @@
+-- =============================================
+-- Secure Core Functions
+-- This script recreates all functions with
+-- security definer and a fixed search path
+-- to address Supabase security advisories.
+-- =============================================
+
+-- Drop existing functions to ensure a clean slate
+DROP FUNCTION IF EXISTS public.handle_new_user();
+DROP FUNCTION IF EXISTS public.handle_first_deposit();
+DROP FUNCTION IF EXISTS public.purchase_robot(uuid, text, numeric, integer);
+
+-- =============================================
+-- Function to create a user profile on signup
+-- =============================================
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  referral_bonus_amount numeric := 10.00;
+  referred_by_user_id uuid;
+begin
+  -- Create a profile for the new user
+  insert into public.profiles (user_id, email, full_name, cpf, phone, referral_code)
+  values (
+    new.id,
+    new.email,
+    new.raw_user_meta_data->>'full_name',
+    new.raw_user_meta_data->>'cpf',
+    new.raw_user_meta_data->>'phone',
+    substring(replace(gen_random_uuid()::text, '-', ''), 1, 8)
+  );
+
+  -- Check if the user was referred
+  if new.raw_user_meta_data->>'referral_code' is not null then
+    -- Find the user who referred them
+    select user_id into referred_by_user_id
+    from public.profiles
+    where referral_code = new.raw_user_meta_data->>'referral_code'
+    limit 1;
+
+    -- If a referrer is found, link them and give the new user a signup bonus
+    if referred_by_user_id is not null then
+      update public.profiles
+      set referred_by = referred_by_user_id
+      where user_id = new.id;
+
+      -- Add signup bonus for the new user
+      insert into public.referral_bonuses (user_id, amount, reason, source_user_id)
+      values (new.id, referral_bonus_amount, 'Bônus de cadastro por indicação', referred_by_user_id);
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+-- =============================================
+-- Function to handle the first deposit bonus
+-- =============================================
+create or replace function public.handle_first_deposit()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  referral_bonus_amount numeric := 10.00;
+  referrer_id uuid;
+  deposit_count integer;
+begin
+  -- Check if this is the user's first deposit
+  select count(*) into deposit_count from public.deposits where user_id = new.user_id;
+
+  if deposit_count = 1 then
+    -- Find out who referred this user
+    select referred_by into referrer_id
+    from public.profiles
+    where user_id = new.user_id;
+
+    -- If the user was referred, give a bonus to the referrer
+    if referrer_id is not null then
+      insert into public.referral_bonuses (user_id, amount, reason, source_user_id)
+      values (referrer_id, referral_bonus_amount, 'Bônus de indicação', new.user_id);
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+-- =============================================
+-- Function to purchase a robot
+-- =============================================
+create or replace function public.purchase_robot(
+  p_user_id uuid,
+  p_robot_id text,
+  p_amount numeric,
+  p_period_days integer
+)
+returns table (success boolean, message text)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_total_deposits numeric;
+  v_total_withdrawals numeric;
+  v_total_investments numeric;
+  v_total_bonuses numeric;
+  v_current_balance numeric;
+begin
+  -- Calculate current balance
+  select coalesce(sum(amount), 0) into v_total_deposits from public.deposits where user_id = p_user_id;
+  select coalesce(sum(amount), 0) into v_total_withdrawals from public.withdrawals where user_id = p_user_id and status = 'completed';
+  select coalesce(sum(amount), 0) into v_total_investments from public.investments where user_id = p_user_id;
+  select coalesce(sum(amount), 0) into v_total_bonuses from public.referral_bonuses where user_id = p_user_id;
+
+  v_current_balance := (v_total_deposits + v_total_bonuses) - v_total_withdrawals - v_total_investments;
+
+  -- Check if balance is sufficient
+  if v_current_balance < p_amount then
+    return query select false, 'Saldo insuficiente para realizar este investimento.';
+    return;
+  end if;
+
+  -- Insert the new investment
+  insert into public.investments (user_id, robot_id, amount, end_date)
+  values (p_user_id, p_robot_id, p_amount, now() + (p_period_days || ' days')::interval);
+
+  return query select true, 'Investimento realizado com sucesso!';
+end;
+$$;

@@ -1,0 +1,222 @@
+-- =================================================================
+-- SCRIPT COMPLETO DE RESET E CRIAÇÃO DO BANCO DE DADOS
+-- Este script irá apagar a estrutura existente e recriá-la corretamente.
+-- =================================================================
+
+-- Passo 1: Remover gatilhos e funções existentes para evitar erros de dependência.
+-- A cláusula CASCADE remove automaticamente os objetos que dependem das funções.
+DROP FUNCTION IF EXISTS public.handle_new_user() CASCADE;
+DROP FUNCTION IF EXISTS public.handle_first_deposit() CASCADE;
+DROP FUNCTION IF EXISTS public.purchase_robot(uuid, text, numeric, integer) CASCADE;
+DROP FUNCTION IF EXISTS public.generate_referral_code() CASCADE;
+
+-- Passo 2: Remover tabelas existentes.
+DROP TABLE IF EXISTS public.referral_bonuses;
+DROP TABLE IF EXISTS public.withdrawals;
+DROP TABLE IF EXISTS public.investments;
+DROP TABLE IF EXISTS public.deposits;
+DROP TABLE IF EXISTS public.profiles;
+
+
+-- Passo 3: Criar a tabela 'profiles'.
+CREATE TABLE public.profiles (
+    user_id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    email text,
+    full_name text,
+    cpf text,
+    phone text,
+    referral_code text UNIQUE NOT NULL,
+    referred_by uuid REFERENCES public.profiles(user_id),
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL
+);
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Perfis públicos são visíveis para todos." ON public.profiles FOR SELECT USING (true);
+CREATE POLICY "Usuários podem criar seu próprio perfil." ON public.profiles FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Usuários podem atualizar seu próprio perfil." ON public.profiles FOR UPDATE USING (auth.uid() = user_id);
+
+
+-- Passo 4: Criar as outras tabelas.
+CREATE TABLE public.deposits (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id uuid NOT NULL REFERENCES auth.users(id),
+    amount numeric NOT NULL,
+    status text DEFAULT 'completed'::text NOT NULL,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL
+);
+ALTER TABLE public.deposits ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Usuários podem ver seus próprios depósitos." ON public.deposits FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Usuários podem criar depósitos." ON public.deposits FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE TABLE public.investments (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id uuid NOT NULL REFERENCES auth.users(id),
+    robot_id text NOT NULL,
+    amount numeric NOT NULL,
+    status text DEFAULT 'active'::text NOT NULL,
+    start_date timestamptz DEFAULT now() NOT NULL,
+    end_date timestamptz NOT NULL,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL
+);
+ALTER TABLE public.investments ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Usuários podem ver seus próprios investimentos." ON public.investments FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Usuários podem criar investimentos." ON public.investments FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE TABLE public.withdrawals (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id uuid NOT NULL REFERENCES auth.users(id),
+    amount numeric NOT NULL,
+    wallet_address text NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL
+);
+ALTER TABLE public.withdrawals ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Usuários podem ver seus próprios saques." ON public.withdrawals FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Usuários podem criar saques." ON public.withdrawals FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE TABLE public.referral_bonuses (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id uuid NOT NULL REFERENCES auth.users(id),
+    amount numeric NOT NULL,
+    reason text NOT NULL,
+    source_user_id uuid REFERENCES auth.users(id),
+    created_at timestamptz DEFAULT now() NOT NULL
+);
+ALTER TABLE public.referral_bonuses ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Usuários podem ver seus próprios bônus." ON public.referral_bonuses FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Permitir inserção para operações do servidor." ON public.referral_bonuses FOR INSERT WITH CHECK (true);
+
+
+-- Passo 5: Criar as funções com as configurações de segurança corretas.
+
+-- Função para gerar um código de referência único.
+CREATE OR REPLACE FUNCTION public.generate_referral_code()
+RETURNS text
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  new_code text;
+  is_duplicate boolean;
+BEGIN
+  LOOP
+    new_code := upper(substr(md5(random()::text), 0, 9)); -- Código aleatório de 8 caracteres
+    SELECT EXISTS (SELECT 1 FROM public.profiles WHERE referral_code = new_code) INTO is_duplicate;
+    IF NOT is_duplicate THEN
+      RETURN new_code;
+    END IF;
+  END LOOP;
+END;
+$$;
+
+-- Função para lidar com a criação de um novo usuário.
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  referrer_id uuid;
+  referral_code_from_meta text;
+BEGIN
+  referral_code_from_meta := new.raw_user_meta_data->>'referral_code';
+
+  IF referral_code_from_meta IS NOT NULL AND referral_code_from_meta <> '' THEN
+    SELECT user_id INTO referrer_id FROM public.profiles WHERE referral_code = referral_code_from_meta;
+  END IF;
+
+  INSERT INTO public.profiles (user_id, email, full_name, cpf, phone, referred_by, referral_code)
+  VALUES (
+    new.id,
+    new.email,
+    new.raw_user_meta_data->>'full_name',
+    new.raw_user_meta_data->>'cpf',
+    new.raw_user_meta_data->>'phone',
+    referrer_id,
+    public.generate_referral_code()
+  );
+
+  INSERT INTO public.referral_bonuses (user_id, amount, reason)
+  VALUES (new.id, 10, 'Bônus de cadastro');
+
+  RETURN new;
+END;
+$$;
+
+-- Função para lidar com o bônus do primeiro depósito.
+CREATE OR REPLACE FUNCTION public.handle_first_deposit()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  referrer_profile record;
+  deposit_count integer;
+BEGIN
+  SELECT count(*) INTO deposit_count FROM public.deposits WHERE user_id = new.user_id;
+
+  IF deposit_count = 1 THEN
+    SELECT * INTO referrer_profile FROM public.profiles WHERE user_id = (
+      SELECT referred_by FROM public.profiles WHERE user_id = new.user_id
+    );
+
+    IF FOUND THEN
+      INSERT INTO public.referral_bonuses (user_id, amount, reason, source_user_id)
+      VALUES (referrer_profile.user_id, 10, 'Bônus de indicação', new.user_id);
+    END IF;
+  END IF;
+
+  RETURN new;
+END;
+$$;
+
+-- Função para comprar um robô.
+CREATE OR REPLACE FUNCTION public.purchase_robot(
+  p_user_id uuid,
+  p_robot_id text,
+  p_amount numeric,
+  p_period_days integer
+)
+RETURNS json
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_total_deposits numeric;
+  v_total_withdrawals numeric;
+  v_total_investments numeric;
+  v_total_bonuses numeric;
+  v_current_balance numeric;
+BEGIN
+  SELECT COALESCE(sum(amount), 0) INTO v_total_deposits FROM public.deposits WHERE user_id = p_user_id;
+  SELECT COALESCE(sum(amount), 0) INTO v_total_withdrawals FROM public.withdrawals WHERE user_id = p_user_id AND status = 'completed';
+  SELECT COALESCE(sum(amount), 0) INTO v_total_investments FROM public.investments WHERE user_id = p_user_id;
+  SELECT COALESCE(sum(amount), 0) INTO v_total_bonuses FROM public.referral_bonuses WHERE user_id = p_user_id;
+
+  v_current_balance := v_total_deposits + v_total_bonuses - v_total_withdrawals - v_total_investments;
+
+  IF v_current_balance < p_amount THEN
+    RETURN json_build_object('success', false, 'message', 'Saldo insuficiente para realizar este investimento.');
+  END IF;
+
+  INSERT INTO public.investments (user_id, robot_id, amount, end_date)
+  VALUES (p_user_id, p_robot_id, p_amount, now() + (p_period_days || ' days')::interval);
+
+  RETURN json_build_object('success', true, 'message', 'Investimento realizado com sucesso!');
+END;
+$$;
+
+
+-- Passo 6: Criar os gatilhos.
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE PROCEDURE public.handle_new_user();
+
+CREATE TRIGGER on_first_deposit
+  AFTER INSERT ON public.deposits
+  FOR EACH ROW EXECUTE PROCEDURE public.handle_first_deposit();

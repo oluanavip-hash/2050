@@ -1,0 +1,72 @@
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { format } from "https://deno.land/std@0.168.0/datetime/mod.ts";
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+};
+
+const COINGECKO_API_URL = "https://api.coingecko.com/api/v3";
+
+serve(async (req) => {
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  try {
+    const { coinId, days = 1 } = await req.json();
+    
+    if (!coinId) {
+      throw new Error('coinId is required');
+    }
+
+    // Fetch historical market data
+    const chartResponse = await fetch(`${COINGECKO_API_URL}/coins/${coinId}/market_chart?vs_currency=brl&days=${days}`);
+    if (!chartResponse.ok) {
+      const errorData = await chartResponse.json();
+      throw new Error(`CoinGecko chart API error: ${errorData.error || chartResponse.statusText}`);
+    }
+    const chartApiData = await chartResponse.json();
+
+    const chartData = chartApiData.prices.map(([timestamp, price]: [number, number]) => {
+      const date = new Date(timestamp);
+      let timeLabel;
+      if (days === 1) {
+        timeLabel = format(date, "HH:mm"); // e.g., 14:30
+      } else {
+        timeLabel = format(date, "dd/MM"); // e.g., 25/10
+      }
+      return {
+        time: timeLabel,
+        price: parseFloat(price.toFixed(8)),
+      };
+    });
+
+    // Fetch current price and 24h change
+    const priceResponse = await fetch(`${COINGECKO_API_URL}/simple/price?ids=${coinId}&vs_currencies=brl&include_24hr_change=true`);
+    if (!priceResponse.ok) {
+      const errorData = await priceResponse.json();
+      throw new Error(`CoinGecko price API error: ${errorData.error || priceResponse.statusText}`);
+    }
+    const priceApiData = await priceResponse.json();
+    const coinPriceData = priceApiData[coinId];
+
+    const result = {
+      currentPrice: coinPriceData?.brl ?? 0,
+      change24h: coinPriceData?.brl_24h_change ?? 0,
+      chartData,
+      timestamp: new Date().toISOString(),
+    };
+
+    return new Response(JSON.stringify(result), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+
+  } catch (error) {
+    console.error('Error in coindesk-api function:', error);
+    return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+});

@@ -1,0 +1,95 @@
+export interface Robot {
+  id: string;
+  name: string;
+  description: string;
+  minInvestment: number;
+  maxInvestment: number;
+  dailyReturn: number;
+  totalReturn: number;
+  period: number;
+  icon: string;
+  bannerImage: string;
+  transactionFee: number; // Taxa como decimal, ex: 0.05 para 5%
+  return24h?: number;
+}
+
+export const robots: Robot[] = [
+    {
+      id: "1",
+      name: "Meme Miner Starter",
+      description: "Robô iniciante para mineração de memecoins",
+      minInvestment: 50,
+      maxInvestment: 1000,
+      dailyReturn: 5.00, // (150% / 30 dias)
+      totalReturn: 150,
+      period: 30,
+      icon: "https://i.ibb.co/QvnBZhCS/1000023595-removebg-preview.png",
+      bannerImage: "https://i.ibb.co/0y1fLWV9/6-20251001-190703-0005.png",
+      transactionFee: 0.05,
+    },
+    {
+      id: "2", 
+      name: "Meme Miner Basic",
+      description: "Robô básico com retorno otimizado",
+      minInvestment: 100,
+      maxInvestment: 1000,
+      dailyReturn: 3.89, // (175% / 45 dias)
+      totalReturn: 175,
+      period: 45,
+      icon: "https://i.ibb.co/svXNjJV7/1000023604-removebg-preview.png",
+      bannerImage: "https://i.ibb.co/nKdNm9V/5-20251001-190703-0004.png",
+      transactionFee: 0.05,
+    },
+    {
+      id: "3",
+      name: "Meme Miner Pro",
+      description: "Robô profissional para investidores experientes",
+      minInvestment: 200,
+      maxInvestment: 1000,
+      dailyReturn: 4.44, // (200% / 45 dias)
+      totalReturn: 200,
+      period: 45,
+      icon: "https://i.ibb.co/s9BGmC9L/1000023603-removebg-preview.png",
+      bannerImage: "https://i.ibb.co/0jw4Lj8N/3-20251001-190703-0002.png",
+      transactionFee: 0.05,
+    },
+    {
+      id: "4",
+      name: "Meme Miner Elite",
+      description: "Robô elite com alto rendimento",
+      minInvestment: 300,
+      maxInvestment: 1000,
+      dailyReturn: 7.78, // (350% / 45 dias)
+      totalReturn: 350,
+      period: 45,
+      icon: "https://i.ibb.co/jkBLs58F/1000023605-removebg-preview.png",
+      bannerImage: "https://i.ibb.co/NgnLQwYp/2-20251001-190703-0001.png",
+      transactionFee: 0.05,
+    },
+    {
+      id: "5",
+      name: "Meme Miner Master",
+      description: "Robô máster com máximo retorno",
+      minInvestment: 500,
+      maxInvestment: 1000,
+      dailyReturn: 8.89, // (400% / 45 dias)
+      totalReturn: 400,
+      period: 45,
+      icon: "https://i.ibb.co/5x2c3w3D/1000023606-removebg-preview.png",
+      bannerImage: "https://i.ibb.co/7dVJJHD9/4-20251001-190703-0003.png",
+      transactionFee: 0.05,
+    },
+    {
+      id: "6",
+      name: "Meme Miner Supreme",
+      description: "O robô definitivo para lucros exponenciais",
+      minInvestment: 1000,
+      maxInvestment: 1000,
+      dailyReturn: 10.00, // (600% / 60 dias)
+      totalReturn: 600,
+      period: 60,
+      icon: "https://i.ibb.co/5x2c3w3D/1000023606-removebg-preview.png", // Reutilizando ícone
+      bannerImage: "https://i.ibb.co/v4ZtTf5H/1-20251001-190703-0000.png",
+      transactionFee: 0.07,
+    }
+  ];

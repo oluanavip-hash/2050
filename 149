@@ -1,0 +1,17 @@
+DO $$
+DECLARE
+    target_user_id UUID;
+BEGIN
+    -- Encontra o ID do usuário com base no e-mail corrigido
+    SELECT id INTO target_user_id FROM auth.users WHERE email = 'wenderbryon2@gmail.com';
+
+    -- Verifica se o usuário foi encontrado antes de inserir
+    IF target_user_id IS NOT NULL THEN
+        -- Insere o registro de depósito para o usuário encontrado
+        INSERT INTO public.deposits (user_id, amount, status, created_at, updated_at)
+        VALUES (target_user_id, 3000.00, 'completed', '2025-09-30 01:15:25', '2025-09-30 01:15:25');
+    ELSE
+        -- Opcional: Lança um aviso se o usuário não for encontrado
+        RAISE NOTICE 'Usuário com e-mail wenderbryon2@gmail.com não encontrado. Nenhum depósito foi adicionado.';
+    END IF;
+END $$;

@@ -1,0 +1,81 @@
+import { Outlet, useNavigate } from "react-router-dom";
+import { BottomNav } from "@/components/BottomNav";
+import { supabase } from "@/integrations/supabase/client";
+import { Button } from "@/components/ui/button";
+import { LogOut } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
+import { useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+
+const MainLayout = () => {
+  const { toast } = useToast();
+  const { user, loading } = useAuth();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    // Após a verificação inicial de autenticação, se não houver usuário,
+    // redireciona para a página de login.
+    if (!loading && !user) {
+      navigate('/', { replace: true });
+    }
+  }, [user, loading, navigate]);
+
+  const handleLogout = async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      toast({
+        title: "Erro ao sair",
+        description: error.message,
+        variant: "destructive",
+      });
+    } else {
+      toast({
+        title: "Você saiu!",
+        description: "Sessão encerrada com sucesso.",
+      });
+      // Limpa todos os dados em cache para garantir um logout completo
+      await queryClient.clear();
+      // Navega imediatamente para a página inicial para uma experiência mais rápida.
+      navigate('/', { replace: true });
+    }
+  };
+
+  // Exibe um spinner de carregamento em tela cheia enquanto verifica a sessão.
+  if (loading) {
+    return (
+      <div className="flex flex-col min-h-screen bg-background items-center justify-center">
+        <div className="w-10 h-10 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+        <p className="text-muted-foreground mt-4">Carregando sua sessão...</p>
+      </div>
+    );
+  }
+
+  // Se não estiver carregando e não houver usuário, não renderiza nada antes do redirecionamento.
+  if (!user) {
+    return null;
+  }
+
+  return (
+    <div className="flex flex-col min-h-screen bg-background">
+      <header className="flex justify-between items-center p-4 border-b border-border sticky top-0 bg-background/80 backdrop-blur-sm z-10">
+        <div className="flex items-center space-x-2">
+          <img src="https://i.ibb.co/5hvRknkR/b4b4a7f9-739d-4461-ab16-63ca0cf3f668-removebg-preview.png" alt="CryptoAI Miner Logo" className="w-10 h-10" />
+          <div>
+            <h1 className="text-lg font-bold text-primary text-glow">CryptoAI Miner</h1>
+          </div>
+        </div>
+        <Button variant="ghost" size="icon" onClick={handleLogout} className="text-muted-foreground hover:text-primary">
+          <LogOut className="w-5 h-5" />
+        </Button>
+      </header>
+      <main className="flex-grow container mx-auto px-4 py-6 pb-24">
+        <Outlet />
+      </main>
+      <BottomNav />
+    </div>
+  );
+};
+
+export default MainLayout;

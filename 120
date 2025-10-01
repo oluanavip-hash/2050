@@ -1,0 +1,64 @@
+-- Remove o gatilho e a função antigos para evitar conflitos
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+DROP FUNCTION IF EXISTS public.handle_new_user();
+
+-- Cria uma função para gerar um código de referência único e legível
+CREATE OR REPLACE FUNCTION public.generate_referral_code()
+RETURNS TEXT AS $$
+DECLARE
+  new_code TEXT;
+  is_duplicate BOOLEAN;
+BEGIN
+  LOOP
+    -- Gera um código alfanumérico de 8 caracteres
+    new_code := (SELECT STRING_AGG(SUBSTR('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', (RANDOM() * 35)::INTEGER + 1, 1), '') FROM GENERATE_SERIES(1, 8));
+    -- Verifica se o código já existe na tabela de perfis
+    SELECT EXISTS (SELECT 1 FROM public.profiles WHERE referral_code = new_code) INTO is_duplicate;
+    IF NOT is_duplicate THEN
+      RETURN new_code;
+    END IF;
+  END LOOP;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+COMMENT ON FUNCTION public.generate_referral_code() IS 'Gera um código de referência alfanumérico único com 8 caracteres.';
+
+-- Recria a função para lidar com novos usuários, agora com geração de código de referência
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+DECLARE
+  referrer_id UUID;
+  input_referral_code TEXT;
+BEGIN
+  -- Extrai o código de referência dos metadados do usuário, se fornecido no cadastro
+  input_referral_code := NEW.raw_user_meta_data->>'referral_code';
+
+  -- Se um código de referência foi fornecido, encontra o ID do usuário que indicou
+  IF input_referral_code IS NOT NULL AND input_referral_code != '' THEN
+    SELECT user_id INTO referrer_id FROM public.profiles WHERE referral_code = input_referral_code;
+  END IF;
+
+  -- Insere o novo usuário na tabela de perfis com seu próprio código de referência gerado
+  INSERT INTO public.profiles (user_id, email, full_name, cpf, phone, referred_by, referral_code)
+  VALUES (
+    NEW.id,
+    NEW.email,
+    NEW.raw_user_meta_data->>'full_name',
+    NEW.raw_user_meta_data->>'cpf',
+    NEW.raw_user_meta_data->>'phone',
+    referrer_id,
+    public.generate_referral_code() -- Gera um código único para o novo usuário
+  );
+
+  -- Concede um bônus de R$10 para o novo usuário por se cadastrar
+  INSERT INTO public.referral_bonuses (user_id, amount, reason)
+  VALUES (NEW.id, 10.00, 'Bônus de cadastro');
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+COMMENT ON FUNCTION public.handle_new_user() IS 'Cria um perfil para um novo usuário, gera um código de referência e atribui bônus de cadastro.';
+
+-- Recria o gatilho que executa a função acima sempre que um novo usuário é criado na tabela auth.users
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();

@@ -1,0 +1,136 @@
+/*
+# [Operação de Segurança de Funções]
+Re-cria todas as funções do banco de dados com o `search_path` seguro para resolver os avisos de segurança do Supabase.
+
+## Descrição da Consulta:
+Esta operação atualiza as funções `handle_new_user`, `handle_first_deposit` e `purchase_robot` para incluir `SET search_path = ''`. Isso é uma medida de segurança crítica para funções `SECURITY DEFINER` que impede a execução de código malicioso através da manipulação do caminho de busca de esquemas. A operação não afeta dados existentes.
+
+## Metadados:
+- Categoria do Esquema: "Segurança"
+- Nível de Impacto: "Baixo"
+- Requer Backup: false
+- Reversível: true (re-criando as funções sem a cláusula de segurança)
+
+## Detalhes da Estrutura:
+- Funções Afetadas:
+  - public.handle_new_user()
+  - public.handle_first_deposit()
+  - public.purchase_robot(text, numeric)
+
+## Implicações de Segurança:
+- Status RLS: Não afetado
+- Mudanças de Política: Não
+- Requisitos de Autenticação: Admin para executar a migração
+- Melhoria: Mitiga o risco de ataques de sequestro de `search_path`.
+
+## Impacto no Desempenho:
+- Índices: Não afetado
+- Gatilhos: Não afetado
+- Impacto Estimado: Nenhum impacto no desempenho do tempo de execução.
+*/
+
+-- Função segura para criar um perfil para um novo usuário
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  -- Insere o perfil do novo usuário e atribui um código de referência
+  INSERT INTO public.profiles (user_id, email, full_name, cpf, phone, referral_code, referred_by)
+  VALUES (
+    new.id,
+    new.email,
+    new.raw_user_meta_data->>'full_name',
+    new.raw_user_meta_data->>'cpf',
+    new.raw_user_meta_data->>'phone',
+    substring(replace(gen_random_uuid()::text, '-', ''), 1, 8),
+    (SELECT user_id FROM public.profiles WHERE referral_code = new.raw_user_meta_data->>'referral_code' LIMIT 1)
+  );
+
+  -- Concede bônus de R$10 se o usuário foi indicado
+  IF (SELECT referred_by FROM public.profiles WHERE user_id = new.id) IS NOT NULL THEN
+    INSERT INTO public.referral_bonuses (user_id, amount, reason, source_user_id)
+    VALUES (new.id, 10, 'Bônus de cadastro por indicação', (SELECT referred_by FROM public.profiles WHERE user_id = new.id));
+  END IF;
+
+  RETURN new;
+END;
+$$;
+
+-- Função segura para lidar com o bônus do primeiro depósito
+CREATE OR REPLACE FUNCTION public.handle_first_deposit()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  referrer_id_val UUID;
+  deposit_count INTEGER;
+BEGIN
+  -- Verifica se este é o primeiro depósito do usuário
+  SELECT count(*) INTO deposit_count FROM public.deposits WHERE user_id = new.user_id;
+
+  IF deposit_count = 1 THEN
+    -- Encontra quem indicou este usuário
+    SELECT referred_by INTO referrer_id_val FROM public.profiles WHERE user_id = new.user_id;
+
+    -- Se o usuário foi indicado, concede um bônus ao indicador
+    IF referrer_id_val IS NOT NULL THEN
+      INSERT INTO public.referral_bonuses (user_id, amount, reason, source_user_id)
+      VALUES (referrer_id_val, 10, 'Bônus de indicação', new.user_id);
+    END IF;
+  END IF;
+
+  RETURN new;
+END;
+$$;
+
+
+-- Função segura para comprar um robô
+CREATE OR REPLACE FUNCTION public.purchase_robot(
+  p_robot_id TEXT,
+  p_amount NUMERIC
+)
+RETURNS TABLE(success BOOLEAN, message TEXT)
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+DECLARE
+  v_user_id UUID := auth.uid();
+  v_total_deposits NUMERIC;
+  v_total_withdrawals NUMERIC;
+  v_total_investments NUMERIC;
+  v_total_bonuses NUMERIC;
+  v_current_balance NUMERIC;
+  v_robot_period INT;
+BEGIN
+  -- Calcula o saldo atual
+  SELECT COALESCE(sum(amount), 0) INTO v_total_deposits FROM public.deposits WHERE user_id = v_user_id;
+  SELECT COALESCE(sum(amount), 0) INTO v_total_withdrawals FROM public.withdrawals WHERE user_id = v_user_id AND status = 'completed';
+  SELECT COALESCE(sum(amount), 0) INTO v_total_investments FROM public.investments WHERE user_id = v_user_id;
+  SELECT COALESCE(sum(amount), 0) INTO v_total_bonuses FROM public.referral_bonuses WHERE user_id = v_user_id;
+
+  v_current_balance := (v_total_deposits + v_total_bonuses) - v_total_withdrawals - v_total_investments;
+
+  -- Verifica se o saldo é suficiente
+  IF v_current_balance < p_amount THEN
+    RETURN QUERY SELECT FALSE, 'Saldo insuficiente para realizar este investimento.';
+    RETURN;
+  END IF;
+
+  -- Obtém o período do robô (hardcoded por enquanto, idealmente viria de uma tabela de robôs)
+  v_robot_period := CASE
+    WHEN p_robot_id = '1' THEN 30
+    ELSE 45
+  END;
+
+  -- Insere o novo investimento
+  INSERT INTO public.investments (user_id, robot_id, amount, end_date)
+  VALUES (v_user_id, p_robot_id, p_amount, now() + (v_robot_period || ' days')::INTERVAL);
+
+  RETURN QUERY SELECT TRUE, 'Investimento realizado com sucesso!';
+END;
+$$;

@@ -1,0 +1,249 @@
+-- =============================================
+-- RESET SCRIPT (DROPS OLD OBJECTS)
+-- =============================================
+-- Drop triggers first to remove dependencies
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+DROP TRIGGER IF EXISTS on_first_deposit ON public.deposits;
+
+-- Drop functions
+DROP FUNCTION IF EXISTS public.handle_new_user();
+DROP FUNCTION IF EXISTS public.handle_first_deposit();
+DROP FUNCTION IF EXISTS public.generate_referral_code();
+DROP FUNCTION IF EXISTS public.purchase_robot(uuid, text, numeric, integer);
+
+-- Drop tables (use CASCADE to remove dependencies like policies)
+DROP TABLE IF EXISTS public.referral_bonuses CASCADE;
+DROP TABLE IF EXISTS public.investments CASCADE;
+DROP TABLE IF EXISTS public.withdrawals CASCADE;
+DROP TABLE IF EXISTS public.deposits CASCADE;
+DROP TABLE IF EXISTS public.profiles CASCADE;
+
+
+-- =============================================
+-- CREATION SCRIPT (TABLES, FUNCTIONS, TRIGGERS)
+-- =============================================
+
+-- 1. PROFILES TABLE
+-- Stores public user data and referral information.
+CREATE TABLE public.profiles (
+    user_id uuid NOT NULL PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    email character varying,
+    full_name character varying,
+    cpf character varying,
+    phone character varying,
+    referral_code character varying UNIQUE,
+    referred_by uuid REFERENCES public.profiles(user_id),
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Public profiles are viewable by everyone." ON public.profiles FOR SELECT USING (true);
+CREATE POLICY "Users can insert their own profile." ON public.profiles FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users can update their own profile." ON public.profiles FOR UPDATE USING (auth.uid() = user_id);
+
+
+-- 2. DEPOSITS TABLE
+-- Stores all user deposits.
+CREATE TABLE public.deposits (
+    id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES auth.users(id),
+    amount numeric NOT NULL,
+    status character varying DEFAULT 'completed'::character varying NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+ALTER TABLE public.deposits ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can view their own deposits." ON public.deposits FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users can insert their own deposits." ON public.deposits FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+
+-- 3. INVESTMENTS TABLE
+-- Stores user investments in robots.
+CREATE TABLE public.investments (
+    id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES auth.users(id),
+    robot_id text NOT NULL,
+    amount numeric NOT NULL,
+    status character varying DEFAULT 'active'::character varying NOT NULL,
+    start_date timestamp with time zone DEFAULT now() NOT NULL,
+    end_date timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+ALTER TABLE public.investments ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can view their own investments." ON public.investments FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users can insert their own investments." ON public.investments FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+
+-- 4. WITHDRAWALS TABLE
+-- Stores user withdrawal requests.
+CREATE TABLE public.withdrawals (
+    id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES auth.users(id),
+    amount numeric NOT NULL,
+    wallet_address text NOT NULL,
+    status character varying DEFAULT 'pending'::character varying NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+ALTER TABLE public.withdrawals ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can view their own withdrawals." ON public.withdrawals FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users can create withdrawal requests." ON public.withdrawals FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+
+-- 5. REFERRAL BONUSES TABLE
+-- Stores all bonuses granted.
+CREATE TABLE public.referral_bonuses (
+    id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES auth.users(id),
+    amount numeric NOT NULL,
+    reason character varying NOT NULL,
+    source_user_id uuid REFERENCES auth.users(id),
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+ALTER TABLE public.referral_bonuses ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can view their own bonuses." ON public.referral_bonuses FOR SELECT USING (auth.uid() = user_id);
+
+
+-- 6. FUNCTION: GENERATE_REFERRAL_CODE
+-- Creates a unique 8-character alphanumeric code.
+CREATE OR REPLACE FUNCTION public.generate_referral_code()
+RETURNS character varying
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    new_code character varying;
+    is_duplicate boolean;
+BEGIN
+    LOOP
+        new_code := upper(substr(md5(random()::text), 0, 9));
+        SELECT EXISTS (SELECT 1 FROM public.profiles WHERE referral_code = new_code) INTO is_duplicate;
+        IF NOT is_duplicate THEN
+            RETURN new_code;
+        END IF;
+    END LOOP;
+END;
+$$;
+
+
+-- 7. FUNCTION: HANDLE_NEW_USER
+-- Triggered after a new user signs up.
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    referrer_id uuid;
+    referral_code_from_signup text;
+BEGIN
+    -- Extract referral code from signup metadata
+    referral_code_from_signup := new.raw_user_meta_data->>'referral_code';
+
+    -- Find the referrer's user_id if a valid code was provided
+    IF referral_code_from_signup IS NOT NULL AND referral_code_from_signup <> '' THEN
+        SELECT user_id INTO referrer_id FROM public.profiles WHERE referral_code = referral_code_from_signup;
+    END IF;
+
+    -- Insert new user into profiles table
+    INSERT INTO public.profiles (user_id, email, full_name, cpf, phone, referred_by, referral_code)
+    VALUES (
+        new.id,
+        new.email,
+        new.raw_user_meta_data->>'full_name',
+        new.raw_user_meta_data->>'cpf',
+        new.raw_user_meta_data->>'phone',
+        referrer_id,
+        public.generate_referral_code() -- Generate a unique code for the new user
+    );
+    RETURN new;
+END;
+$$;
+
+
+-- 8. TRIGGER: ON_AUTH_USER_CREATED
+-- Connects the handle_new_user function to new user creation in auth.users.
+CREATE TRIGGER on_auth_user_created
+AFTER INSERT ON auth.users
+FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+
+-- 9. FUNCTION: HANDLE_FIRST_DEPOSIT
+-- Triggered after a new deposit is made.
+CREATE OR REPLACE FUNCTION public.handle_first_deposit()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    deposit_count integer;
+    referrer_id uuid;
+BEGIN
+    -- Check if this is the user's first deposit
+    SELECT count(*) INTO deposit_count FROM public.deposits WHERE user_id = new.user_id;
+
+    IF deposit_count = 1 THEN
+        -- Grant R$10 bonus to the new user for their first deposit
+        INSERT INTO public.referral_bonuses (user_id, amount, reason)
+        VALUES (new.user_id, 10, 'Bônus de cadastro');
+
+        -- Check if the user was referred
+        SELECT referred_by INTO referrer_id FROM public.profiles WHERE user_id = new.user_id;
+
+        -- If they were referred, grant R$10 bonus to the referrer
+        IF referrer_id IS NOT NULL THEN
+            INSERT INTO public.referral_bonuses (user_id, amount, reason, source_user_id)
+            VALUES (referrer_id, 10, 'Bônus de indicação', new.user_id);
+        END IF;
+    END IF;
+
+    RETURN new;
+END;
+$$;
+
+
+-- 10. TRIGGER: ON_FIRST_DEPOSIT
+-- Connects the handle_first_deposit function to new deposits.
+CREATE TRIGGER on_first_deposit
+AFTER INSERT ON public.deposits
+FOR EACH ROW EXECUTE FUNCTION public.handle_first_deposit();
+
+
+-- 11. FUNCTION: PURCHASE_ROBOT
+-- Securely handles the purchase of a robot.
+CREATE OR REPLACE FUNCTION public.purchase_robot(p_user_id uuid, p_robot_id text, p_amount numeric, p_period_days integer)
+RETURNS TABLE(success boolean, message text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_total_deposits numeric;
+    v_total_withdrawals numeric;
+    v_total_investments numeric;
+    v_total_bonuses numeric;
+    v_current_balance numeric;
+BEGIN
+    -- Calculate current balance
+    SELECT COALESCE(sum(amount), 0) INTO v_total_deposits FROM public.deposits WHERE user_id = p_user_id;
+    SELECT COALESCE(sum(amount), 0) INTO v_total_withdrawals FROM public.withdrawals WHERE user_id = p_user_id AND status = 'completed';
+    SELECT COALESCE(sum(amount), 0) INTO v_total_investments FROM public.investments WHERE user_id = p_user_id;
+    SELECT COALESCE(sum(amount), 0) INTO v_total_bonuses FROM public.referral_bonuses WHERE user_id = p_user_id;
+
+    v_current_balance := v_total_deposits + v_total_bonuses - v_total_withdrawals - v_total_investments;
+
+    -- Check if balance is sufficient
+    IF v_current_balance < p_amount THEN
+        RETURN QUERY SELECT false, 'Saldo insuficiente para realizar este investimento.';
+        RETURN;
+    END IF;
+
+    -- Insert the new investment
+    INSERT INTO public.investments (user_id, robot_id, amount, end_date)
+    VALUES (p_user_id, p_robot_id, p_amount, now() + (p_period_days || ' days')::interval);
+
+    RETURN QUERY SELECT true, 'Investimento realizado com sucesso!';
+END;
+$$;

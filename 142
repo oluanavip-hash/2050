@@ -1,0 +1,103 @@
+import { useState, useEffect } from "react";
+import useEmblaCarousel from "embla-carousel-react";
+import Autoplay from "embla-carousel-autoplay";
+import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { TrendingUp } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+
+interface CoinData {
+  id: string;
+  name: string;
+  symbol: string;
+  icon: string;
+  currentPrice?: number;
+  change24h?: number;
+}
+
+const memeCoins: Omit<CoinData, 'currentPrice' | 'change24h'>[] = [
+    { id: "dogecoin", name: "Dogecoin", symbol: "DOGE", icon: "https://i.ibb.co/Fk4Q99k7/74.png" },
+    { id: "shiba-inu", name: "Shiba Inu", symbol: "SHIB", icon: "https://i.ibb.co/Sw8ShNJc/5994.png" },
+    { id: "pepe", name: "Pepe", symbol: "PEPE", icon: "https://i.ibb.co/Ls3Qptb/24478.png" },
+    { id: "magatrumporg", name: "MAGA", symbol: "TRUMP", icon: "https://i.ibb.co/m5ShLXvS/35336.png" },
+    { id: "bonk", name: "Bonk", symbol: "BONK", icon: "https://i.ibb.co/3973wvfh/23095.png" },
+    { id: "mew-cat", name: "Cats in a Dogs World", symbol: "MEW", icon: "https://i.ibb.co/kgTzFgX8/30126.png" },
+    { id: "tochi-inu", name: "Tochi", symbol: "TOCHI", icon: "https://i.ibb.co/vxyMprRn/27750.png" },
+    { id: "snek", name: "Snek", symbol: "SNEK", icon: "https://i.ibb.co/qFVknrPF/25264.png" },
+    { id: "turbo", name: "Turbo", symbol: "TURBO", icon: "https://i.ibb.co/XZy2D1KT/24911.png" },
+    { id: "floki", name: "Floki", symbol: "FLOKI", icon: "https://i.ibb.co/bjxSLTbH/10804.png" }
+];
+
+export const MemeCoinCarousel = () => {
+  const [emblaRef] = useEmblaCarousel({ loop: true, align: "start" }, [Autoplay({ delay: 1000 })]);
+  const [coinsData, setCoinsData] = useState<CoinData[]>(memeCoins.map(c => ({...c})));
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchAllCoinData = async () => {
+      setLoading(true);
+      const promises = memeCoins.map(coin => 
+        supabase.functions.invoke('coindesk-api', { body: { coinId: coin.id } })
+      );
+      
+      const results = await Promise.allSettled(promises);
+      
+      const updatedCoinsData = memeCoins.map((coin, index) => {
+        const result = results[index];
+        if (result.status === 'fulfilled' && result.value.data && !result.value.error) {
+          const price = parseFloat(result.value.data.currentPrice);
+          const change = parseFloat(result.value.data.change24h);
+          
+          return {
+            ...coin,
+            currentPrice: !isNaN(price) ? price : undefined,
+            change24h: !isNaN(change) ? change : undefined,
+          };
+        }
+        return coin;
+      });
+
+      setCoinsData(updatedCoinsData);
+      setLoading(false);
+    };
+
+    fetchAllCoinData();
+  }, []);
+
+  return (
+    <div className="relative">
+      <div className="overflow-hidden -mx-4 px-4" ref={emblaRef}>
+        <div className="flex gap-3">
+          {(loading ? Array.from({ length: 5 }) : coinsData).map((coin, index) => (
+            <div key={coin?.id || index} className="flex-[0_0_45%] sm:flex-[0_0_30%] md:flex-[0_0_22%] min-w-0">
+              {loading ? (
+                <Card className="bg-card p-3 border-border h-full">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Skeleton className="w-6 h-6 rounded-full" />
+                    <Skeleton className="h-4 w-12" />
+                  </div>
+                  <Skeleton className="h-5 w-20 mb-1" />
+                  <Skeleton className="h-4 w-16" />
+                </Card>
+              ) : (
+                <Card className="bg-card p-3 border-border h-full">
+                  <div className="flex items-center gap-2 mb-2">
+                    <img src={coin.icon} alt={coin.name} className="w-6 h-6" />
+                    <span className="text-sm font-semibold truncate">{coin.name}</span>
+                  </div>
+                  <p className="text-lg font-bold">
+                    R$ {coin.currentPrice?.toFixed(6) ?? '--'}
+                  </p>
+                  <div className={`flex items-center gap-1 text-xs font-semibold ${coin.change24h && coin.change24h >= 0 ? 'text-primary' : 'text-red-500'}`}>
+                    <TrendingUp className="w-3 h-3" />
+                    <span>{coin.change24h?.toFixed(2) ?? '--'}%</span>
+                  </div>
+                </Card>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};

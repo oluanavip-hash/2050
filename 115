@@ -1,0 +1,322 @@
+-- =============================================
+-- Reset de Funções e Gatilhos (CASCADE)
+-- =============================================
+/*
+# [Operação de Reset]
+Remove funções e o gatilho associado para permitir uma recriação limpa.
+
+## Query Description:
+Esta operação remove o gatilho `on_auth_user_created` e as funções `handle_new_user`, `handle_first_deposit`, e `purchase_robot`. A opção CASCADE garante que quaisquer objetos dependentes (como o gatilho) sejam removidos junto com as funções, evitando erros de dependência. É um passo seguro e necessário antes de recriar a estrutura.
+
+## Metadata:
+- Schema-Category: "Structural"
+- Impact-Level: "Medium"
+- Requires-Backup: false
+- Reversible: false (as funções serão recriadas)
+
+## Security Implications:
+- RLS Status: N/A
+- Policy Changes: No
+- Auth Requirements: Admin
+*/
+DROP FUNCTION IF EXISTS public.handle_new_user() CASCADE;
+DROP FUNCTION IF EXISTS public.handle_first_deposit() CASCADE;
+DROP FUNCTION IF EXISTS public.purchase_robot(uuid, text, numeric, integer) CASCADE;
+
+-- =============================================
+-- Reset de Tabelas
+-- =============================================
+/*
+# [Operação de Limpeza de Tabelas]
+Remove as tabelas existentes para garantir uma recriação sem conflitos.
+
+## Query Description:
+Esta operação remove as tabelas `referral_bonuses`, `withdrawals`, `investments`, `deposits`, e `profiles`. É uma medida destrutiva, mas necessária para corrigir erros de migração anteriores e garantir uma base de dados limpa e consistente com a nova estrutura.
+
+## Metadata:
+- Schema-Category: "Dangerous"
+- Impact-Level: "High"
+- Requires-Backup: true
+- Reversible: false
+
+## Security Implications:
+- RLS Status: N/A
+- Policy Changes: No
+- Auth Requirements: Admin
+*/
+DROP TABLE IF EXISTS public.referral_bonuses;
+DROP TABLE IF EXISTS public.withdrawals;
+DROP TABLE IF EXISTS public.investments;
+DROP TABLE IF EXISTS public.deposits;
+DROP TABLE IF EXISTS public.profiles;
+
+-- =============================================
+-- Criação da Tabela de Perfis (Profiles)
+-- =============================================
+/*
+# [Criação da Tabela Profiles]
+Cria a tabela para armazenar dados de perfil dos usuários.
+
+## Query Description:
+Esta tabela armazena informações adicionais do usuário, vinculadas à tabela `auth.users`. Inclui um código de referência único para o programa de afiliados.
+
+## Metadata:
+- Schema-Category: "Structural"
+- Impact-Level: "Low"
+- Requires-Backup: false
+- Reversible: true (com DROP TABLE)
+*/
+CREATE TABLE public.profiles (
+    user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    email TEXT,
+    full_name TEXT,
+    cpf TEXT,
+    phone TEXT,
+    referral_code TEXT UNIQUE NOT NULL,
+    referred_by UUID REFERENCES public.profiles(user_id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Usuários podem ver seus próprios perfis" ON public.profiles FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Usuários podem atualizar seus próprios perfis" ON public.profiles FOR UPDATE USING (auth.uid() = user_id);
+
+-- =============================================
+-- Criação da Tabela de Depósitos (Deposits)
+-- =============================================
+CREATE TABLE public.deposits (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES auth.users(id) NOT NULL,
+    amount NUMERIC NOT NULL,
+    status TEXT DEFAULT 'completed' NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+ALTER TABLE public.deposits ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Usuários podem ver seus próprios depósitos" ON public.deposits FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Permitir inserção de depósitos para o próprio usuário" ON public.deposits FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+-- =============================================
+-- Criação da Tabela de Investimentos (Investments)
+-- =============================================
+CREATE TABLE public.investments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES auth.users(id) NOT NULL,
+    robot_id TEXT NOT NULL,
+    amount NUMERIC NOT NULL,
+    status TEXT DEFAULT 'active' NOT NULL,
+    start_date TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    end_date TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+ALTER TABLE public.investments ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Usuários podem ver seus próprios investimentos" ON public.investments FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Permitir inserção de investimentos para o próprio usuário" ON public.investments FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+-- =============================================
+-- Criação da Tabela de Saques (Withdrawals)
+-- =============================================
+CREATE TABLE public.withdrawals (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES auth.users(id) NOT NULL,
+    amount NUMERIC NOT NULL,
+    wallet_address TEXT NOT NULL,
+    status TEXT DEFAULT 'pending' NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+ALTER TABLE public.withdrawals ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Usuários podem ver seus próprios saques" ON public.withdrawals FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Usuários podem criar solicitações de saque" ON public.withdrawals FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+-- =============================================
+-- Criação da Tabela de Bônus de Referência (Referral Bonuses)
+-- =============================================
+CREATE TABLE public.referral_bonuses (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES auth.users(id) NOT NULL,
+    amount NUMERIC NOT NULL,
+    reason TEXT NOT NULL,
+    source_user_id UUID REFERENCES auth.users(id),
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+ALTER TABLE public.referral_bonuses ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Usuários podem ver seus próprios bônus" ON public.referral_bonuses FOR SELECT USING (auth.uid() = user_id);
+
+-- =============================================
+-- Função para Criar Perfil de Novo Usuário (handle_new_user)
+-- =============================================
+/*
+# [Criação da Função handle_new_user]
+Cria um perfil para um novo usuário e aplica bônus de referência se aplicável.
+
+## Query Description:
+Esta função é acionada após a criação de um novo usuário em `auth.users`. Ela insere um novo registro na tabela `public.profiles`, gera um código de referência único e, se o usuário foi indicado, encontra o perfil do indicador e aplica os bônus para ambos.
+
+## Metadata:
+- Schema-Category: "Structural"
+- Impact-Level: "Medium"
+- Requires-Backup: false
+- Reversible: true (com DROP FUNCTION)
+*/
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  referrer_id_var UUID;
+  referral_code_var TEXT;
+BEGIN
+  -- Gera um código de referência único
+  referral_code_var := substr(md5(random()::text), 0, 9);
+  
+  -- Verifica se o usuário foi indicado
+  SELECT id INTO referrer_id_var
+  FROM public.profiles
+  WHERE referral_code = new.raw_user_meta_data->>'referral_code';
+
+  -- Insere o novo perfil
+  INSERT INTO public.profiles (user_id, email, full_name, cpf, phone, referral_code, referred_by)
+  VALUES (
+    new.id,
+    new.email,
+    new.raw_user_meta_data->>'full_name',
+    new.raw_user_meta_data->>'cpf',
+    new.raw_user_meta_data->>'phone',
+    referral_code_var,
+    referrer_id_var
+  );
+
+  -- Se foi indicado, insere o bônus para o novo usuário
+  IF referrer_id_var IS NOT NULL THEN
+    INSERT INTO public.referral_bonuses (user_id, amount, reason, source_user_id)
+    VALUES (new.id, 10, 'Bônus de cadastro por indicação', referrer_id_var);
+  END IF;
+
+  RETURN new;
+END;
+$$;
+
+-- =============================================
+-- Gatilho para Novos Usuários (on_auth_user_created)
+-- =============================================
+CREATE TRIGGER on_auth_user_created
+AFTER INSERT ON auth.users
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_new_user();
+
+-- =============================================
+-- Função para Bônus de Primeiro Depósito (handle_first_deposit)
+-- =============================================
+/*
+# [Criação da Função handle_first_deposit]
+Aplica bônus para o indicador no primeiro depósito do indicado.
+
+## Query Description:
+Esta função é acionada após um novo depósito. Ela verifica se é o primeiro depósito de um usuário que foi indicado. Se for, concede um bônus de R$10 ao usuário que o indicou.
+
+## Metadata:
+- Schema-Category: "Structural"
+- Impact-Level: "Medium"
+- Requires-Backup: false
+- Reversible: true (com DROP FUNCTION)
+*/
+CREATE OR REPLACE FUNCTION public.handle_first_deposit()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  deposit_count INT;
+  referrer_id_var UUID;
+BEGIN
+  -- Conta quantos depósitos o usuário já fez
+  SELECT count(*) INTO deposit_count
+  FROM public.deposits
+  WHERE user_id = new.user_id;
+
+  -- Se for o primeiro depósito
+  IF deposit_count = 1 THEN
+    -- Encontra quem indicou o usuário
+    SELECT referred_by INTO referrer_id_var
+    FROM public.profiles
+    WHERE user_id = new.user_id;
+
+    -- Se houver um indicador, aplica o bônus
+    IF referrer_id_var IS NOT NULL THEN
+      INSERT INTO public.referral_bonuses (user_id, amount, reason, source_user_id)
+      VALUES (referrer_id_var, 10, 'Bônus de indicação', new.user_id);
+    END IF;
+  END IF;
+
+  RETURN new;
+END;
+$$;
+
+-- =============================================
+-- Gatilho para Primeiro Depósito (on_first_deposit)
+-- =============================================
+CREATE TRIGGER on_first_deposit
+AFTER INSERT ON public.deposits
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_first_deposit();
+
+-- =============================================
+-- Função para Comprar Robô (purchase_robot)
+-- =============================================
+/*
+# [Criação da Função purchase_robot]
+Processa a compra de um robô, validando o saldo do usuário.
+
+## Query Description:
+Esta função calcula o saldo atual do usuário (depósitos + bônus - saques - investimentos) e verifica se é suficiente para a compra. Se for, cria um novo registro de investimento. Caso contrário, retorna uma mensagem de erro.
+
+## Metadata:
+- Schema-Category: "Data"
+- Impact-Level: "Medium"
+- Requires-Backup: false
+- Reversible: true (com DROP FUNCTION)
+*/
+CREATE OR REPLACE FUNCTION public.purchase_robot(
+  p_user_id UUID,
+  p_robot_id TEXT,
+  p_amount NUMERIC,
+  p_period_days INT
+)
+RETURNS TABLE (success BOOLEAN, message TEXT)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_total_deposits NUMERIC;
+  v_total_withdrawals NUMERIC;
+  v_total_investments NUMERIC;
+  v_total_bonuses NUMERIC;
+  v_current_balance NUMERIC;
+BEGIN
+  -- Calcula o saldo atual
+  SELECT COALESCE(SUM(amount), 0) INTO v_total_deposits FROM public.deposits WHERE user_id = p_user_id;
+  SELECT COALESCE(SUM(amount), 0) INTO v_total_withdrawals FROM public.withdrawals WHERE user_id = p_user_id AND status = 'completed';
+  SELECT COALESCE(SUM(amount), 0) INTO v_total_investments FROM public.investments WHERE user_id = p_user_id;
+  SELECT COALESCE(SUM(amount), 0) INTO v_total_bonuses FROM public.referral_bonuses WHERE user_id = p_user_id;
+  
+  v_current_balance := (v_total_deposits + v_total_bonuses) - v_total_withdrawals - v_total_investments;
+
+  -- Verifica se o saldo é suficiente
+  IF v_current_balance < p_amount THEN
+    RETURN QUERY SELECT FALSE, 'Saldo insuficiente para realizar este investimento.';
+    RETURN;
+  END IF;
+
+  -- Insere o novo investimento
+  INSERT INTO public.investments (user_id, robot_id, amount, end_date)
+  VALUES (p_user_id, p_robot_id, p_amount, NOW() + (p_period_days || ' days')::INTERVAL);
+
+  RETURN QUERY SELECT TRUE, 'Investimento realizado com sucesso!';
+END;
+$$;

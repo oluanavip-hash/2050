@@ -1,0 +1,43 @@
+import { Toaster } from "@/components/ui/toaster";
+import { Toaster as Sonner } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { AuthProvider } from "./contexts/AuthContext";
+import Index from "./pages/Index";
+import NotFound from "./pages/NotFound";
+import MainLayout from "./layouts/MainLayout";
+import HomePage from "./pages/HomePage";
+import AffiliatesPage from "./pages/AffiliatesPage";
+import WalletPage from "./pages/WalletPage";
+import ReportsPage from "./pages/ReportsPage";
+import AchievementsPage from "./pages/AchievementsPage";
+
+const queryClient = new QueryClient();
+
+const App = () => (
+  <QueryClientProvider client={queryClient}>
+    <TooltipProvider>
+      <AuthProvider>
+        <Toaster />
+        <Sonner />
+        <BrowserRouter>
+          <Routes>
+            <Route path="/" element={<Index />} />
+            <Route path="/app" element={<MainLayout />}>
+              <Route index element={<Navigate to="home" replace />} />
+              <Route path="home" element={<HomePage />} />
+              <Route path="achievements" element={<AchievementsPage />} />
+              <Route path="affiliates" element={<AffiliatesPage />} />
+              <Route path="wallet" element={<WalletPage />} />
+              <Route path="reports" element={<ReportsPage />} />
+            </Route>
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </BrowserRouter>
+      </AuthProvider>
+    </TooltipProvider>
+  </QueryClientProvider>
+);
+
+export default App;

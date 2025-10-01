@@ -1,0 +1,179 @@
+-- Securing function generate_referral_code
+CREATE OR REPLACE FUNCTION public.generate_referral_code()
+RETURNS TEXT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  new_code TEXT;
+  is_duplicate BOOLEAN;
+BEGIN
+  LOOP
+    new_code := upper(substr(md5(random()::text), 0, 9));
+    SELECT EXISTS (SELECT 1 FROM public.profiles WHERE referral_code = new_code) INTO is_duplicate;
+    IF NOT is_duplicate THEN
+      RETURN new_code;
+    END IF;
+  END LOOP;
+END;
+$$;
+
+-- Securing function handle_new_user
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  referred_by_user_id UUID;
+BEGIN
+  -- Find the user who referred this new user, if any
+  IF NEW.raw_user_meta_data->>'referral_code' IS NOT NULL AND NEW.raw_user_meta_data->>'referral_code' <> '' THEN
+    SELECT user_id INTO referred_by_user_id FROM public.profiles WHERE referral_code = NEW.raw_user_meta_data->>'referral_code';
+  END IF;
+
+  -- Create a profile for the new user
+  INSERT INTO public.profiles (user_id, email, full_name, cpf, phone, referred_by)
+  VALUES (
+    NEW.id,
+    NEW.email,
+    NEW.raw_user_meta_data->>'full_name',
+    NEW.raw_user_meta_data->>'cpf',
+    NEW.raw_user_meta_data->>'phone',
+    referred_by_user_id
+  );
+
+  -- Grant a R$10 bonus to the new user if they were referred
+  IF referred_by_user_id IS NOT NULL THEN
+    INSERT INTO public.referral_bonuses (user_id, amount, reason, source_user_id)
+    VALUES (NEW.id, 10, 'Bônus de cadastro por indicação', referred_by_user_id);
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+-- Securing function handle_first_deposit
+CREATE OR REPLACE FUNCTION public.handle_first_deposit()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  referrer_id UUID;
+  deposit_count INT;
+BEGIN
+  -- Check if this is the user's first deposit
+  SELECT count(*) INTO deposit_count FROM public.deposits WHERE user_id = NEW.user_id;
+
+  IF deposit_count = 1 THEN
+    -- Find who referred the user
+    SELECT referred_by INTO referrer_id FROM public.profiles WHERE user_id = NEW.user_id;
+
+    -- If the user was referred, grant a R$10 bonus to the referrer
+    IF referrer_id IS NOT NULL THEN
+      INSERT INTO public.referral_bonuses (user_id, amount, reason, source_user_id)
+      VALUES (referrer_id, 10, 'Bônus de indicação', NEW.user_id);
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+-- Securing function update_balance_on_deposit
+CREATE OR REPLACE FUNCTION public.update_balance_on_deposit()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  UPDATE public.profiles
+  SET balance = balance + NEW.amount
+  WHERE user_id = NEW.user_id;
+  RETURN NEW;
+END;
+$$;
+
+-- Securing function update_balance_on_investment
+CREATE OR REPLACE FUNCTION public.update_balance_on_investment()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  UPDATE public.profiles
+  SET balance = balance - NEW.amount
+  WHERE user_id = NEW.user_id;
+  RETURN NEW;
+END;
+$$;
+
+-- Securing function update_balance_on_withdrawal
+CREATE OR REPLACE FUNCTION public.update_balance_on_withdrawal()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  IF NEW.status = 'pending' THEN
+    UPDATE public.profiles
+    SET balance = balance - NEW.amount
+    WHERE user_id = NEW.user_id;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+-- Securing function update_balance_on_bonus
+CREATE OR REPLACE FUNCTION public.update_balance_on_bonus()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  UPDATE public.profiles
+  SET balance = balance + NEW.amount
+  WHERE user_id = NEW.user_id;
+  RETURN NEW;
+END;
+$$;
+
+-- Securing function purchase_robot
+CREATE OR REPLACE FUNCTION public.purchase_robot(
+  p_user_id uuid,
+  p_robot_id text,
+  p_amount numeric,
+  p_period_days integer
+)
+RETURNS TABLE(success boolean, message text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_current_balance numeric;
+BEGIN
+  -- Get current balance directly from the profiles table
+  SELECT balance INTO v_current_balance FROM public.profiles WHERE user_id = p_user_id;
+
+  -- Check if balance is sufficient
+  IF v_current_balance < p_amount THEN
+    RETURN QUERY SELECT false, 'Saldo insuficiente para realizar este investimento.';
+    RETURN;
+  END IF;
+
+  -- Insert the new investment
+  INSERT INTO public.investments (user_id, robot_id, amount, end_date)
+  VALUES (p_user_id, p_robot_id, p_amount, now() + (p_period_days || ' days')::interval);
+
+  RETURN QUERY SELECT true, 'Investimento realizado com sucesso!';
+END;
+$$;

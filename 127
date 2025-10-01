@@ -1,0 +1,117 @@
+-- 1. Desabilita RLS temporariamente para modificar a tabela
+alter table public.profiles disable row level security;
+
+-- 2. Adiciona a coluna de saldo se ela não existir
+alter table public.profiles add column if not exists balance numeric not null default 0;
+
+-- 3. Habilita RLS novamente
+alter table public.profiles enable row level security;
+
+-- 4. Funções de gatilho para atualizar o saldo
+-- Dropa as funções e gatilhos antigos se existirem para evitar conflitos
+drop trigger if exists on_deposit_update_balance on public.deposits;
+drop function if exists public.update_balance_on_deposit();
+
+drop trigger if exists on_investment_update_balance on public.investments;
+drop function if exists public.update_balance_on_investment();
+
+drop trigger if exists on_withdrawal_update_balance on public.withdrawals;
+drop function if exists public.update_balance_on_withdrawal();
+
+drop trigger if exists on_bonus_update_balance on public.referral_bonuses;
+drop function if exists public.update_balance_on_bonus();
+
+-- Função para depósitos (+)
+create or replace function public.update_balance_on_deposit()
+returns trigger as $$
+begin
+  update public.profiles
+  set balance = balance + new.amount
+  where user_id = new.user_id;
+  return new;
+end;
+$$ language plpgsql security definer;
+-- Gatilho para depósitos
+create trigger on_deposit_update_balance
+after insert on public.deposits
+for each row execute function public.update_balance_on_deposit();
+
+-- Função para investimentos (-)
+create or replace function public.update_balance_on_investment()
+returns trigger as $$
+begin
+  -- Esta função é chamada pela RPC purchase_robot, que já verifica o saldo.
+  -- O gatilho apenas deduz o valor.
+  update public.profiles
+  set balance = balance - new.amount
+  where user_id = new.user_id;
+  return new;
+end;
+$$ language plpgsql security definer;
+-- Gatilho para investimentos
+create trigger on_investment_update_balance
+after insert on public.investments
+for each row execute function public.update_balance_on_investment();
+
+-- Função para saques (-)
+create or replace function public.update_balance_on_withdrawal()
+returns trigger as $$
+begin
+  update public.profiles
+  set balance = balance - new.amount
+  where user_id = new.user_id;
+  return new;
+end;
+$$ language plpgsql security definer;
+-- Gatilho para saques
+create trigger on_withdrawal_update_balance
+after insert on public.withdrawals
+for each row execute function public.update_balance_on_withdrawal();
+
+-- Função para bônus (+)
+create or replace function public.update_balance_on_bonus()
+returns trigger as $$
+begin
+  update public.profiles
+  set balance = balance + new.amount
+  where user_id = new.user_id;
+  return new;
+end;
+$$ language plpgsql security definer;
+-- Gatilho para bônus
+create trigger on_bonus_update_balance
+after insert on public.referral_bonuses
+for each row execute function public.update_balance_on_bonus();
+
+
+-- 5. Otimiza a função de compra de robô para usar o saldo do perfil
+create or replace function public.purchase_robot(
+  p_user_id uuid,
+  p_robot_id text,
+  p_amount numeric,
+  p_period_days integer
+)
+returns table(success boolean, message text)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_current_balance numeric;
+begin
+  -- Pega o saldo diretamente do perfil do usuário
+  select balance into v_current_balance from public.profiles where user_id = p_user_id;
+
+  -- Verifica se o saldo é suficiente
+  if v_current_balance < p_amount then
+    return query select false, 'Saldo insuficiente para realizar este investimento.';
+    return;
+  end if;
+
+  -- Insere o novo investimento. O gatilho 'on_investment_update_balance' cuidará de deduzir o saldo.
+  insert into public.investments (user_id, robot_id, amount, end_date)
+  values (p_user_id, p_robot_id, p_amount, now() + (p_period_days || ' days')::interval);
+
+  return query select true, 'Investimento realizado com sucesso!';
+end;
+$$;

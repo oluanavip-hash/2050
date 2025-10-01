@@ -1,0 +1,125 @@
+-- Remove os gatilhos existentes para evitar conflitos de dependência
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+DROP TRIGGER IF EXISTS on_first_deposit_bonus ON public.deposits;
+
+-- Remove as funções antigas, se existirem
+DROP FUNCTION IF EXISTS public.handle_new_user();
+DROP FUNCTION IF EXISTS public.handle_first_deposit();
+DROP FUNCTION IF EXISTS public.purchase_robot(uuid, text, numeric, integer);
+
+-- Recria a função para lidar com novos usuários com as melhores práticas de segurança
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''; -- Correção de segurança
+AS $$
+DECLARE
+  referral_code_value TEXT;
+  referred_by_user_id UUID;
+BEGIN
+  -- Gera um código de referência único
+  referral_code_value := substr(md5(random()::text), 0, 9);
+
+  -- Verifica se o novo usuário foi indicado por alguém
+  IF NEW.raw_user_meta_data->>'referral_code' IS NOT NULL THEN
+    SELECT user_id INTO referred_by_user_id FROM public.profiles WHERE referral_code = (NEW.raw_user_meta_data->>'referral_code');
+  END IF;
+
+  -- Cria o perfil para o novo usuário
+  INSERT INTO public.profiles (user_id, email, full_name, cpf, phone, referral_code, referred_by)
+  VALUES (
+    NEW.id,
+    NEW.email,
+    NEW.raw_user_meta_data->>'full_name',
+    NEW.raw_user_meta_data->>'cpf',
+    NEW.raw_user_meta_data->>'phone',
+    referral_code_value,
+    referred_by_user_id
+  );
+
+  -- Concede um bônus de R$10 para o novo usuário
+  INSERT INTO public.referral_bonuses (user_id, amount, reason)
+  VALUES (NEW.id, 10, 'Bônus de cadastro');
+
+  RETURN NEW;
+END;
+$$;
+
+-- Recria a função para lidar com o bônus do primeiro depósito
+CREATE OR REPLACE FUNCTION public.handle_first_deposit()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''; -- Correção de segurança
+AS $$
+DECLARE
+  deposit_count INTEGER;
+  referrer_id UUID;
+BEGIN
+  -- Verifica se este é o primeiro depósito do usuário
+  SELECT count(*) INTO deposit_count FROM public.deposits WHERE user_id = NEW.user_id;
+
+  -- Se for o primeiro depósito, concede o bônus para quem o indicou
+  IF deposit_count = 1 THEN
+    SELECT referred_by INTO referrer_id FROM public.profiles WHERE user_id = NEW.user_id;
+
+    IF referrer_id IS NOT NULL THEN
+      INSERT INTO public.referral_bonuses (user_id, amount, reason, source_user_id)
+      VALUES (referrer_id, 10, 'Bônus de indicação', NEW.user_id);
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+-- Recria a função para comprar robôs, verificando o saldo
+CREATE OR REPLACE FUNCTION public.purchase_robot(
+  p_user_id uuid,
+  p_robot_id text,
+  p_amount numeric,
+  p_period_days integer
+)
+RETURNS TABLE (success boolean, message text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''; -- Correção de segurança
+AS $$
+DECLARE
+  v_total_deposits numeric;
+  v_total_bonuses numeric;
+  v_total_withdrawals numeric;
+  v_total_investments numeric;
+  v_current_balance numeric;
+BEGIN
+  -- Calcula o saldo atual
+  SELECT COALESCE(sum(amount), 0) INTO v_total_deposits FROM public.deposits WHERE user_id = p_user_id;
+  SELECT COALESCE(sum(amount), 0) INTO v_total_bonuses FROM public.referral_bonuses WHERE user_id = p_user_id;
+  SELECT COALESce(sum(amount), 0) INTO v_total_withdrawals FROM public.withdrawals WHERE user_id = p_user_id AND status = 'completed';
+  SELECT COALESCE(sum(amount), 0) INTO v_total_investments FROM public.investments WHERE user_id = p_user_id;
+  
+  v_current_balance := (v_total_deposits + v_total_bonuses) - v_total_withdrawals - v_total_investments;
+
+  -- Verifica se o saldo é suficiente
+  IF v_current_balance < p_amount THEN
+    RETURN QUERY SELECT false, 'Saldo insuficiente para realizar este investimento.';
+    RETURN;
+  END IF;
+
+  -- Insere o novo investimento
+  INSERT INTO public.investments (user_id, robot_id, amount, end_date)
+  VALUES (p_user_id, p_robot_id, p_amount, now() + (p_period_days || ' days')::interval);
+  
+  RETURN QUERY SELECT true, 'Investimento realizado com sucesso!';
+END;
+$$;
+
+-- Recria os gatilhos
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE PROCEDURE public.handle_new_user();
+
+CREATE TRIGGER on_first_deposit_bonus
+  AFTER INSERT ON public.deposits
+  FOR EACH ROW EXECUTE PROCEDURE public.handle_first_deposit();

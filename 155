@@ -1,0 +1,19 @@
+export interface MemeCoin {
+  id: string;
+  name: string;
+  symbol: string;
+  icon: string;
+}
+
+export const memeCoins: MemeCoin[] = [
+    { id: "dogecoin", name: "Dogecoin", symbol: "DOGE", icon: "https://i.ibb.co/Fk4Q99k7/74.png" },
+    { id: "shiba-inu", name: "Shiba Inu", symbol: "SHIB", icon: "https://i.ibb.co/Sw8ShNJc/5994.png" },
+    { id: "pepe", name: "Pepe", symbol: "PEPE", icon: "https://i.ibb.co/Ls3Qptb/24478.png" },
+    { id: "magatrumporg", name: "MAGA", symbol: "TRUMP", icon: "https://i.ibb.co/m5ShLXvS/35336.png" },
+    { id: "bonk", name: "Bonk", symbol: "BONK", icon: "https://i.ibb.co/3973wvfh/23095.png" },
+    { id: "mew-cat", name: "Cats in a Dogs World", symbol: "MEW", icon: "https://i.ibb.co/kgTzFgX8/30126.png" },
+    { id: "tochi-inu", name: "Tochi", symbol: "TOCHI", icon: "https://i.ibb.co/vxyMprRn/27750.png" },
+    { id: "snek", name: "Snek", symbol: "SNEK", icon: "https://i.ibb.co/qFVknrPF/25264.png" },
+    { id: "turbo", name: "Turbo", symbol: "TURBO", icon: "https://i.ibb.co/XZy2D1KT/24911.png" },
+    { id: "floki", name: "Floki", symbol: "FLOKI", icon: "https://i.ibb.co/bjxSLTbH/10804.png" }
+];

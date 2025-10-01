@@ -1,0 +1,111 @@
+-- Securing the handle_new_user function
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  referral_user_id UUID;
+BEGIN
+  -- Check if a referral code was provided and find the referrer's user_id
+  IF NEW.raw_user_meta_data->>'referral_code' IS NOT NULL THEN
+    SELECT user_id INTO referral_user_id
+    FROM public.profiles
+    WHERE referral_code = NEW.raw_user_meta_data->>'referral_code'
+    LIMIT 1;
+  END IF;
+
+  -- Insert into public.profiles
+  INSERT INTO public.profiles (user_id, email, full_name, cpf, phone, referred_by)
+  VALUES (
+    NEW.id,
+    NEW.email,
+    NEW.raw_user_meta_data->>'full_name',
+    NEW.raw_user_meta_data->>'cpf',
+    NEW.raw_user_meta_data->>'phone',
+    referral_user_id
+  );
+
+  -- Grant bonus to the new user if they were referred
+  IF referral_user_id IS NOT NULL THEN
+    INSERT INTO public.referral_bonuses (user_id, amount, reason, source_user_id)
+    VALUES (NEW.id, 10, 'Bônus de cadastro por indicação', referral_user_id);
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+-- Securing the handle_first_deposit function
+CREATE OR REPLACE FUNCTION public.handle_first_deposit()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  referrer_id UUID;
+  deposit_count INT;
+BEGIN
+  -- Check if it's the user's first deposit
+  SELECT count(*) INTO deposit_count FROM public.deposits WHERE user_id = NEW.user_id;
+
+  IF deposit_count = 1 THEN
+    -- Find who referred this user
+    SELECT referred_by INTO referrer_id FROM public.profiles WHERE user_id = NEW.user_id;
+    
+    -- If a referrer exists, grant them a bonus
+    IF referrer_id IS NOT NULL THEN
+      INSERT INTO public.referral_bonuses (user_id, amount, reason, source_user_id)
+      VALUES (referrer_id, 10, 'Bônus de indicação', NEW.user_id);
+    END IF;
+  END IF;
+  
+  RETURN NEW;
+END;
+$$;
+
+-- Securing the purchase_robot function
+CREATE OR REPLACE FUNCTION public.purchase_robot(p_user_id uuid, p_robot_id text, p_amount numeric, p_period_days integer)
+RETURNS TABLE(success boolean, message text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_current_balance numeric;
+BEGIN
+  -- Get current balance directly from the profiles table
+  SELECT balance INTO v_current_balance FROM public.profiles WHERE user_id = p_user_id;
+
+  -- Check if balance is sufficient
+  IF v_current_balance < p_amount THEN
+    RETURN QUERY SELECT false, 'Saldo insuficiente para realizar este investimento.';
+    RETURN;
+  END IF;
+
+  -- Insert the new investment
+  INSERT INTO public.investments (user_id, robot_id, amount, end_date)
+  VALUES (p_user_id, p_robot_id, p_amount, now() + (p_period_days || ' days')::interval);
+
+  RETURN QUERY SELECT true, 'Investimento realizado com sucesso!';
+END;
+$$;
+
+-- Securing the balance update functions
+CREATE OR REPLACE FUNCTION public.update_balance_on_deposit()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN UPDATE public.profiles SET balance = balance + NEW.amount WHERE user_id = NEW.user_id; RETURN NEW; END; $$;
+
+CREATE OR REPLACE FUNCTION public.update_balance_on_withdrawal()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN UPDATE public.profiles SET balance = balance - NEW.amount WHERE user_id = NEW.user_id; RETURN NEW; END; $$;
+
+CREATE OR REPLACE FUNCTION public.update_balance_on_investment()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN UPDATE public.profiles SET balance = balance - NEW.amount WHERE user_id = NEW.user_id; RETURN NEW; END; $$;
+
+CREATE OR REPLACE FUNCTION public.update_balance_on_bonus()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN UPDATE public.profiles SET balance = balance + NEW.amount WHERE user_id = NEW.user_id; RETURN NEW; END; $$;

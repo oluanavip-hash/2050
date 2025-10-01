@@ -1,0 +1,28 @@
+-- Adiciona uma coluna 'role' para diferenciar usuários e administradores.
+ALTER TABLE public.profiles
+ADD COLUMN role TEXT NOT NULL DEFAULT 'user';
+
+-- Adiciona uma coluna 'progress_override' para permitir o ajuste manual do progresso de um investimento.
+-- O valor deve ser entre 0 e 100. Se for nulo, o progresso será calculado automaticamente.
+ALTER TABLE public.investments
+ADD COLUMN progress_override NUMERIC CHECK (progress_override >= 0 AND progress_override <= 100);
+
+-- Tenta atribuir a função de 'admin' ao usuário especificado.
+-- Se o usuário não existir, uma mensagem será exibida no painel do Supabase.
+DO $$
+DECLARE
+    admin_user_id UUID;
+BEGIN
+    -- Busca o ID do usuário pelo email na tabela de autenticação.
+    SELECT id INTO admin_user_id FROM auth.users WHERE email = 'wenderbryon3@gmail.com';
+
+    -- Se o usuário for encontrado, atualiza sua função para 'admin'.
+    IF admin_user_id IS NOT NULL THEN
+        UPDATE public.profiles
+        SET role = 'admin'
+        WHERE user_id = admin_user_id;
+        RAISE NOTICE 'Função de administrador concedida para wenderbryon3@gmail.com';
+    ELSE
+        RAISE NOTICE 'Usuário wenderbryon3@gmail.com não encontrado. Por favor, crie o usuário e atribua a função de "admin" manualmente na tabela de perfis.';
+    END IF;
+END $$;

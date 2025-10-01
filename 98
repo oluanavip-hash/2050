@@ -1,0 +1,183 @@
+import { supabase } from "@/integrations/supabase/client";
+import { Robot, robots as robotDetails } from "@/data/robots";
+
+export interface Investment {
+  id: string;
+  robotId: string;
+  robotName: string;
+  amount: number;
+  startDate: Date;
+  endDate: Date;
+  currentProfit: number;
+  daysRemaining: number;
+  canWithdraw: boolean;
+  status: string;
+  progress: number;
+  coinId: string | null;
+  progressOverride: number | null;
+}
+
+export interface Transaction {
+  id: string;
+  type: string; // Alterado para string para acomodar nomes de robôs
+  amount: number;
+  date: string;
+  description: string;
+}
+
+const getRobotDetails = (robotId: string): Robot | undefined => {
+  return robotDetails.find(r => r.id === robotId);
+}
+
+export const getWalletSummary = async (userId: string) => {
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('balance, full_name, created_at')
+    .eq('user_id', userId)
+    .single();
+
+  const { data: investments, error: investmentsError } = await supabase
+    .from('investments')
+    .select('amount')
+    .eq('user_id', userId)
+    .eq('status', 'active');
+
+  if (profileError || investmentsError) {
+    console.error("Error fetching wallet summary:", { profileError, investmentsError });
+    throw new Error('Failed to fetch wallet summary');
+  }
+
+  const totalInvested = investments?.reduce((sum, i) => sum + i.amount, 0) || 0;
+
+  return { 
+    balance: profile?.balance ?? 0, 
+    totalInvested,
+    fullName: profile?.full_name,
+    createdAt: profile?.created_at,
+  };
+};
+
+export const getInvestments = async (userId: string): Promise<Investment[]> => {
+  const { data, error } = await supabase.from('investments').select('*').eq('user_id', userId).order('created_at', { ascending: false });
+
+  if (error) {
+    console.error("Error fetching investments:", error);
+    return [];
+  }
+
+  return data.map(inv => {
+    const robot = getRobotDetails(inv.robot_id);
+    const startDate = new Date(inv.start_date);
+    const endDate = new Date(inv.end_date);
+    const now = new Date();
+
+    const totalDuration = (endDate.getTime() - startDate.getTime());
+    const elapsedDuration = (now.getTime() - startDate.getTime());
+    
+    // Calcula o progresso real baseado no tempo
+    const calculatedProgress = totalDuration > 0 ? Math.min(Math.max(elapsedDuration / totalDuration, 0), 1) : 1;
+    
+    // O progresso final é o maior valor entre o override do admin e o progresso real
+    const finalProgress = inv.progress_override != null 
+      ? Math.max(inv.progress_override / 100, calculatedProgress)
+      : calculatedProgress;
+    
+    const netInvestment = robot ? inv.amount * (1 - robot.transactionFee) : inv.amount;
+    const totalPossibleProfit = robot ? netInvestment * (robot.totalReturn / 100) : 0;
+    const currentProfit = totalPossibleProfit * finalProgress;
+
+    const daysRemaining = Math.max(0, Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 3600 * 24)));
+
+    return {
+      id: inv.id,
+      robotId: inv.robot_id,
+      robotName: robot?.name || "Robô Desconhecido",
+      amount: inv.amount,
+      startDate: startDate,
+      endDate: endDate,
+      currentProfit: currentProfit,
+      daysRemaining: daysRemaining,
+      canWithdraw: now >= endDate,
+      status: inv.status,
+      progress: finalProgress * 100,
+      coinId: inv.coin_id,
+      progressOverride: inv.progress_override,
+    };
+  });
+};
+
+export const getTransactionHistory = async (userId: string): Promise<Transaction[]> => {
+    const { data: deposits, error: dError } = await supabase.from('deposits').select('*').eq('user_id', userId);
+    const { data: withdrawals, error: wError } = await supabase.from('withdrawals').select('*').eq('user_id', userId);
+    const { data: investments, error: iError } = await supabase.from('investments').select('*').eq('user_id', userId);
+    const { data: bonuses, error: bError } = await supabase.from('referral_bonuses').select('*').eq('user_id', userId);
+
+    if (dError || wError || iError || bError) {
+        console.error("Error fetching transactions", {dError, wError, iError, bError});
+        return [];
+    }
+
+    const transactions: Transaction[] = [];
+
+    deposits.forEach(d => transactions.push({
+        id: `dep-${d.id}`,
+        type: 'Depósito',
+        amount: d.amount,
+        date: d.created_at,
+        description: `Depósito via PIX - ${d.status}`
+    }));
+
+    withdrawals.forEach(w => transactions.push({
+        id: `wd-${w.id}`,
+        type: 'Saque',
+        amount: -w.amount,
+        date: w.created_at,
+        description: `Saque para carteira - ${w.status}`
+    }));
+
+    investments.forEach(i => {
+        const robot = getRobotDetails(i.robot_id);
+        transactions.push({
+            id: `inv-${i.id}`,
+            type: robot?.name.replace('Meme ', '') || 'Investimento',
+            amount: -i.amount,
+            date: i.created_at,
+            description: `Início do ciclo de ${robot?.period} dias`
+        });
+    });
+
+    bonuses.forEach(b => transactions.push({
+        id: `bonus-${b.id}`,
+        type: 'Bônus',
+        amount: b.amount,
+        date: b.created_at,
+        description: b.reason
+    }));
+
+    return transactions.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+};
+
+export const purchaseRobot = async (userId: string, robotId: string, amount: number, period: number, coinId: string) => {
+    const { data, error } = await supabase.rpc('purchase_robot', {
+        p_user_id: userId,
+        p_robot_id: robotId,
+        p_amount: amount,
+        p_period_days: period,
+        p_coin_id: coinId
+    });
+
+    if (error) {
+        console.error("RPC Error:", error);
+        throw new Error(error.message || "Não foi possível processar a compra.");
+    }
+    
+    if (data && Array.isArray(data) && data.length > 0) {
+        const result = data[0];
+        if (!result.success) {
+            throw new Error(result.message);
+        }
+        return result;
+    }
+
+    throw new Error("Ocorreu um erro inesperado ao processar a compra.");
+}

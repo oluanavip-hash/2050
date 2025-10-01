@@ -1,0 +1,80 @@
+import { supabase } from "@/integrations/supabase/client";
+
+export interface Referral {
+  id: string;
+  email: string | null;
+  status: 'Pendente' | 'Ativo';
+  joined_at: string;
+}
+
+export const getAffiliateSummary = async (userId: string) => {
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('referral_code')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  // Se o perfil não for encontrado ou houver um erro, retorna valores padrão.
+  if (profileError || !profile) {
+    if (profileError) {
+      console.error("Affiliate profile error:", profileError.message);
+    }
+    return {
+        referralCode: '', // Retorna string vazia em vez de "..."
+        referrals: [],
+        totalEarnings: 0,
+        activeReferrals: 0,
+        totalReferrals: 0,
+    };
+  }
+  
+  const referralCode = profile.referral_code;
+
+  const { data: referralsData, error: referralsError } = await supabase
+    .from('profiles')
+    .select('user_id, email, created_at')
+    .eq('referred_by', userId);
+
+  if (referralsError) {
+    console.error("Error fetching referrals:", referralsError);
+    throw new Error("Could not fetch referrals.");
+  }
+
+  const referralsWithStatus: Referral[] = await Promise.all(
+    referralsData.map(async (ref) => {
+      const { count, error: depositError } = await supabase
+        .from('deposits')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', ref.user_id);
+      
+      return {
+        id: ref.user_id,
+        email: ref.email,
+        status: (depositError || count === 0) ? 'Pendente' : 'Ativo',
+        joined_at: ref.created_at,
+      };
+    })
+  );
+
+  const { data: bonuses, error: bonusesError } = await supabase
+    .from('referral_bonuses')
+    .select('amount')
+    .eq('user_id', userId)
+    .eq('reason', 'Bônus de indicação');
+
+  if (bonusesError) {
+    console.error("Error fetching bonuses:", bonusesError);
+    throw new Error("Could not fetch referral bonuses.");
+  }
+
+  const totalEarnings = bonuses.reduce((sum, b) => sum + b.amount, 0);
+  const activeReferrals = referralsWithStatus.filter(r => r.status === 'Ativo').length;
+
+  return {
+    referralCode,
+    referrals: referralsWithStatus,
+    totalEarnings,
+    activeReferrals,
+    totalReferrals: referralsWithStatus.length,
+  };
+};

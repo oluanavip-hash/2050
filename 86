@@ -1,0 +1,6 @@
+-- Adicionar coluna CPF na tabela profiles
+ALTER TABLE public.profiles 
+ADD COLUMN cpf TEXT;
+
+-- Criar índice para CPF (útil para buscas)
+CREATE INDEX idx_profiles_cpf ON public.profiles(cpf);

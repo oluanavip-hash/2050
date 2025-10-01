@@ -1,0 +1,124 @@
+import { useState, useEffect } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+import { useAuth } from "@/contexts/AuthContext";
+import { Robot } from "@/data/robots";
+import { MemeCoinCarousel } from "@/components/MemeCoinCarousel";
+import { Footer } from "@/components/Footer";
+import { AuthModal } from "@/components/AuthModal";
+import { User, Gift, ChevronRight, PlayCircle } from "lucide-react";
+import { RobotModal } from "@/components/RobotModal";
+import { Card } from "@/components/ui/card";
+import { HowItWorksCarouselModal } from "@/components/HowItWorksCarouselModal";
+import { RobotCarousel } from "@/components/RobotCarousel";
+
+export default function Index() {
+  const { isAuthenticated } = useAuth();
+  const navigate = useNavigate();
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showRobotModal, setShowRobotModal] = useState(false);
+  const [showHowItWorksModal, setShowHowItWorksModal] = useState(false);
+  const [selectedRobot, setSelectedRobot] = useState<Robot | null>(null);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate('/app/home', { replace: true });
+    }
+  }, [isAuthenticated, navigate]);
+
+  if (isAuthenticated) {
+    return null;
+  }
+
+  const handleSimulateClick = (robot: Robot) => {
+    setSelectedRobot(robot);
+    setShowRobotModal(true);
+  };
+
+  return (
+    <div className="flex flex-col min-h-screen bg-background text-white">
+      <header className="px-4 lg:px-6 h-14 flex items-center justify-between sticky top-0 bg-background/90 backdrop-blur-sm z-20">
+        <Link to="/" className="flex items-center justify-center gap-2">
+          <img src="https://i.ibb.co/5hvRknkR/b4b4a7f9-739d-4461-ab16-63ca0cf3f668-removebg-preview.png" alt="CryptoAI Miner Logo" className="h-10 w-auto" />
+          <h1 className="text-xl font-bold text-primary text-glow">CryptoAI Miner</h1>
+        </Link>
+        <nav className="ml-auto flex gap-4 sm:gap-6">
+          <Button 
+            onClick={() => setShowAuthModal(true)}
+            className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold px-4 py-2 rounded-xl flex items-center gap-2"
+          >
+            <User className="w-4 h-4" />
+            Login
+          </Button>
+        </nav>
+      </header>
+      <main className="flex-1">
+        <section className="w-full py-12 md:py-24 lg:py-32 bg-background">
+          <div className="container px-4 md:px-6 space-y-12">
+            <div className="overflow-hidden rounded-3xl shadow-lg shadow-primary/20">
+              <img 
+                src="https://i.ibb.co/7J2T91kJ/1000023765.gif" 
+                alt="Banner CryptoAI Miner" 
+                className="w-full h-auto object-cover"
+              />
+            </div>
+
+            <div className="flex justify-center -mt-6">
+              <Button 
+                onClick={() => setShowHowItWorksModal(true)}
+                className="bg-card border border-primary/50 text-primary hover:bg-primary/10 font-semibold px-6 py-3 rounded-xl flex items-center gap-2 text-lg shadow-lg shadow-primary/10"
+              >
+                <PlayCircle className="w-6 h-6" />
+                Como Funciona?
+              </Button>
+            </div>
+            
+            <Card className="bg-card rounded-3xl p-6">
+              <div className="flex justify-between items-center">
+                <div className="flex items-center gap-4">
+                  <Gift className="w-8 h-8 text-primary" />
+                  <div>
+                    <h3 className="text-primary text-lg font-bold">
+                      Cadastre-se e ganhe R$10 de bônus!
+                    </h3>
+                    <p className="text-sm text-muted-foreground">Comece a investir com um presente nosso.</p>
+                  </div>
+                </div>
+                <Button 
+                  onClick={() => setShowAuthModal(true)}
+                  className="bg-primary hover:bg-primary/90 text-primary-foreground w-12 h-12 rounded-xl flex-shrink-0"
+                >
+                  <ChevronRight className="w-6 h-6" />
+                </Button>
+              </div>
+            </Card>
+
+            <div>
+              <h2 className="text-3xl font-bold tracking-tighter text-center mb-8 text-primary text-glow">Nossos Robôs</h2>
+              <RobotCarousel onRobotClick={handleSimulateClick} />
+            </div>
+
+            <div className="mt-16">
+              <h2 className="text-3xl font-bold tracking-tighter text-center mb-8 text-primary text-glow">Memecoins Mineradas</h2>
+              <MemeCoinCarousel />
+            </div>
+          </div>
+        </section>
+      </main>
+      <Footer />
+      <AuthModal 
+        open={showAuthModal}
+        onOpenChange={setShowAuthModal}
+      />
+      <RobotModal 
+        open={showRobotModal}
+        onOpenChange={setShowRobotModal}
+        robot={selectedRobot}
+      />
+      <HowItWorksCarouselModal
+        open={showHowItWorksModal}
+        onOpenChange={setShowHowItWorksModal}
+      />
+    </div>
+  );
+}

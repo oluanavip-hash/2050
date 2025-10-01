@@ -1,0 +1,233 @@
+-- CryptoAI Miner - Complete Schema Setup
+-- Version: 1.0
+-- Date: 2025-10-02
+-- This script sets up the entire database schema, including tables, RLS, and automation functions.
+-- It is designed to be run on a clean database. Please remove any old tables before running.
+
+-- 1. PROFILES TABLE
+-- Stores public-facing user information and referral data.
+drop table if exists public.profiles cascade;
+create table public.profiles (
+  user_id uuid not null primary key references auth.users (id) on delete cascade,
+  email text,
+  full_name text,
+  cpf text,
+  phone text,
+  referral_code text not null unique default substring(md5(random()::text), 1, 8),
+  referred_by uuid null references public.profiles (user_id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+comment on table public.profiles is 'Stores public user data and referral information.';
+
+-- RLS for profiles
+alter table public.profiles enable row level security;
+create policy "Public profiles are viewable by everyone." on public.profiles for select using (true);
+create policy "Users can insert their own profile." on public.profiles for insert with check (auth.uid() = user_id);
+create policy "Users can update their own profile." on public.profiles for update using (auth.uid() = user_id);
+
+-- 2. DEPOSITS TABLE
+-- Tracks all deposits made by users.
+drop table if exists public.deposits cascade;
+create table public.deposits (
+  id uuid not null primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  amount numeric not null check (amount > 0),
+  status text not null default 'completed',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+comment on table public.deposits is 'Tracks user deposits.';
+
+-- RLS for deposits
+alter table public.deposits enable row level security;
+create policy "Users can view their own deposits." on public.deposits for select using (auth.uid() = user_id);
+create policy "Users can create deposits." on public.deposits for insert with check (auth.uid() = user_id);
+
+-- 3. WITHDRAWALS TABLE
+-- Tracks all withdrawal requests.
+drop table if exists public.withdrawals cascade;
+create table public.withdrawals (
+  id uuid not null primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  amount numeric not null check (amount > 0),
+  wallet_address text not null,
+  status text not null default 'pending', -- pending, completed, failed
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+comment on table public.withdrawals is 'Tracks user withdrawal requests.';
+
+-- RLS for withdrawals
+alter table public.withdrawals enable row level security;
+create policy "Users can view their own withdrawals." on public.withdrawals for select using (auth.uid() = user_id);
+create policy "Users can create withdrawals." on public.withdrawals for insert with check (auth.uid() = user_id);
+
+-- 4. INVESTMENTS TABLE
+-- Tracks user investments in robots.
+drop table if exists public.investments cascade;
+create table public.investments (
+  id uuid not null primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  robot_id text not null,
+  amount numeric not null check (amount > 0),
+  status text not null default 'active', -- active, completed
+  start_date timestamptz not null default now(),
+  end_date timestamptz not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+comment on table public.investments is 'Tracks user investments in crypto robots.';
+
+-- RLS for investments
+alter table public.investments enable row level security;
+create policy "Users can view their own investments." on public.investments for select using (auth.uid() = user_id);
+create policy "Users can create investments." on public.investments for insert with check (auth.uid() = user_id);
+
+-- 5. REFERRAL BONUSES TABLE
+-- Tracks all bonuses awarded to users.
+drop table if exists public.referral_bonuses cascade;
+create table public.referral_bonuses (
+  id uuid not null primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id),
+  amount numeric not null,
+  reason text not null, -- "Bônus de cadastro", "Bônus de indicação"
+  source_user_id uuid null references auth.users(id), -- The user who triggered the bonus (e.g., the new user who signed up)
+  created_at timestamptz not null default now()
+);
+comment on table public.referral_bonuses is 'Logs all awarded bonuses for referrals and sign-ups.';
+
+-- RLS for referral_bonuses
+alter table public.referral_bonuses enable row level security;
+create policy "Users can see their own bonuses." on public.referral_bonuses for select using (auth.uid() = user_id);
+
+
+-- 6. AUTOMATION: FUNCTION TO CREATE USER PROFILE & AWARD SIGN-UP BONUS
+-- This function is called by a trigger when a new user signs up.
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  referrer_id uuid;
+begin
+  -- Check if a referral code was provided and find the referrer
+  if new.raw_user_meta_data ->> 'referral_code' is not null then
+    select user_id into referrer_id
+    from public.profiles
+    where referral_code = (new.raw_user_meta_data ->> 'referral_code');
+  end if;
+
+  -- Insert a new profile for the new user
+  insert into public.profiles (user_id, email, full_name, cpf, phone, referred_by)
+  values (
+    new.id,
+    new.email,
+    new.raw_user_meta_data ->> 'full_name',
+    new.raw_user_meta_data ->> 'cpf',
+    new.raw_user_meta_data ->> 'phone',
+    referrer_id
+  );
+  
+  -- Award the sign-up bonus to the new user
+  insert into public.referral_bonuses (user_id, amount, reason, source_user_id)
+  values (new.id, 10, 'Bônus de cadastro', new.id);
+  
+  return new;
+end;
+$$;
+comment on function public.handle_new_user() is 'Creates a user profile and awards a sign-up bonus upon new user registration.';
+
+-- 7. AUTOMATION: TRIGGER FOR NEW USERS
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user();
+
+-- 8. AUTOMATION: FUNCTION TO HANDLE FIRST DEPOSIT BONUS
+-- This function is called by a trigger when a new deposit is made.
+create or replace function public.handle_first_deposit()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  deposit_count integer;
+  referrer_profile record;
+begin
+  -- Check if this is the user's first deposit
+  select count(*) into deposit_count from public.deposits where user_id = new.user_id;
+
+  -- If it is the first deposit (count will be 1 because the trigger is AFTER INSERT)
+  if deposit_count = 1 then
+    -- Find the user who referred the new depositor
+    select p.user_id, p.referred_by into referrer_profile
+    from public.profiles p
+    where p.user_id = new.user_id;
+
+    -- If there is a referrer, award them a bonus
+    if referrer_profile.referred_by is not null then
+      insert into public.referral_bonuses (user_id, amount, reason, source_user_id)
+      values (referrer_profile.referred_by, 10, 'Bônus de indicação', new.user_id);
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+comment on function public.handle_first_deposit() is 'Awards a bonus to the referrer on a user''s first deposit.';
+
+-- 9. AUTOMATION: TRIGGER FOR FIRST DEPOSIT
+drop trigger if exists on_first_deposit on public.deposits;
+create trigger on_first_deposit
+  after insert on public.deposits
+  for each row execute procedure public.handle_first_deposit();
+
+-- 10. FUNCTION: PURCHASE ROBOT
+-- Securely handles the purchase of a robot by checking balance.
+create or replace function public.purchase_robot(p_robot_id text, p_amount numeric)
+returns table (success boolean, message text)
+language plpgsql
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_total_deposits numeric;
+  v_total_withdrawals numeric;
+  v_total_investments numeric;
+  v_total_bonuses numeric;
+  v_current_balance numeric;
+  v_robot_period int;
+begin
+  -- Get robot period from a temp mapping
+  v_robot_period := case p_robot_id
+    when '1' then 30
+    when '2' then 45
+    when '3' then 45
+    when '4' then 45
+    when '5' then 45
+    else 30
+  end;
+
+  -- Calculate current balance
+  select coalesce(sum(amount), 0) into v_total_deposits from public.deposits where user_id = v_user_id;
+  select coalesce(sum(amount), 0) into v_total_withdrawals from public.withdrawals where user_id = v_user_id and status = 'completed';
+  select coalesce(sum(amount), 0) into v_total_investments from public.investments where user_id = v_user_id;
+  select coalesce(sum(amount), 0) into v_total_bonuses from public.referral_bonuses where user_id = v_user_id;
+  
+  v_current_balance := v_total_deposits + v_total_bonuses - v_total_withdrawals - v_total_investments;
+
+  -- Check if balance is sufficient
+  if v_current_balance < p_amount then
+    return query select false, 'Saldo insuficiente para realizar este investimento.';
+    return;
+  end if;
+
+  -- Insert the new investment
+  insert into public.investments (user_id, robot_id, amount, end_date)
+  values (v_user_id, p_robot_id, p_amount, now() + (v_robot_period || ' days')::interval);
+
+  return query select true, 'Investimento realizado com sucesso!';
+end;
+$$;
+comment on function public.purchase_robot(text, numeric) is 'Atomically handles a robot purchase, checking user balance before creating an investment.';

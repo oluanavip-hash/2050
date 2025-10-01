@@ -1,0 +1,110 @@
+-- Step 1: Drop the triggers that depend on the functions to be updated.
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+DROP TRIGGER IF EXISTS on_first_deposit ON public.deposits;
+
+-- Step 2: Recreate the handle_new_user function with security settings.
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  -- Create a profile for the new user
+  INSERT INTO public.profiles (user_id, email, full_name, cpf, phone, referral_code, referred_by)
+  VALUES (
+    new.id,
+    new.email,
+    new.raw_user_meta_data->>'full_name',
+    new.raw_user_meta_data->>'cpf',
+    new.raw_user_meta_data->>'phone',
+    substring(md5(random()::text) for 10), -- Generate a random referral code
+    (SELECT user_id FROM public.profiles WHERE referral_code = new.raw_user_meta_data->>'referral_code' LIMIT 1)
+  );
+
+  -- Apply signup bonus to the new user
+  INSERT INTO public.referral_bonuses (user_id, amount, reason)
+  VALUES (new.id, 10, 'Bônus de cadastro');
+
+  RETURN new;
+END;
+$$;
+
+-- Step 3: Recreate the handle_first_deposit function with security settings.
+CREATE OR REPLACE FUNCTION public.handle_first_deposit()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  referrer_id_var UUID;
+BEGIN
+  -- Check if this is the user's first deposit
+  IF (SELECT count(*) FROM public.deposits WHERE user_id = new.user_id) = 1 THEN
+    -- Find who referred this user
+    SELECT referred_by INTO referrer_id_var
+    FROM public.profiles
+    WHERE user_id = new.user_id;
+
+    -- If the user was referred, give a bonus to the referrer
+    IF referrer_id_var IS NOT NULL THEN
+      INSERT INTO public.referral_bonuses (user_id, amount, reason, source_user_id)
+      VALUES (referrer_id_var, 10, 'Bônus de indicação', new.user_id);
+    END IF;
+  END IF;
+  RETURN new;
+END;
+$$;
+
+-- Step 4: Recreate the purchase_robot function with security settings.
+CREATE OR REPLACE FUNCTION public.purchase_robot(
+  p_user_id uuid,
+  p_robot_id text,
+  p_amount numeric,
+  p_period_days integer
+)
+RETURNS TABLE (success boolean, message text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_total_deposits numeric;
+  v_total_withdrawals numeric;
+  v_total_investments numeric;
+  v_total_bonuses numeric;
+  v_current_balance numeric;
+BEGIN
+  -- Calculate current balance
+  SELECT COALESCE(SUM(amount), 0) INTO v_total_deposits FROM public.deposits WHERE user_id = p_user_id;
+  SELECT COALESCE(SUM(amount), 0) INTO v_total_withdrawals FROM public.withdrawals WHERE user_id = p_user_id AND status = 'completed';
+  SELECT COALESCE(SUM(amount), 0) INTO v_total_investments FROM public.investments WHERE user_id = p_user_id;
+  SELECT COALESCE(SUM(amount), 0) INTO v_total_bonuses FROM public.referral_bonuses WHERE user_id = p_user_id;
+
+  v_current_balance := (v_total_deposits + v_total_bonuses) - v_total_withdrawals - v_total_investments;
+
+  -- Check if balance is sufficient
+  IF v_current_balance < p_amount THEN
+    RETURN QUERY SELECT false, 'Saldo insuficiente para realizar este investimento.';
+    RETURN;
+  END IF;
+
+  -- Insert the new investment
+  INSERT INTO public.investments (user_id, robot_id, amount, end_date)
+  VALUES (p_user_id, p_robot_id, p_amount, now() + (p_period_days || ' days')::interval);
+
+  RETURN QUERY SELECT true, 'Investimento realizado com sucesso!';
+END;
+$$;
+
+-- Step 5: Re-create the triggers.
+CREATE TRIGGER on_auth_user_created
+AFTER INSERT ON auth.users
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_new_user();
+
+CREATE TRIGGER on_first_deposit
+AFTER INSERT ON public.deposits
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_first_deposit();

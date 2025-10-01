@@ -1,0 +1,72 @@
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { DollarSign, Percent, TrendingUp, Cpu, ShieldCheck } from "lucide-react";
+
+const ReportsPage = () => {
+  return (
+    <div className="space-y-6">
+      <h1 className="text-2xl font-bold">Taxas da Plataforma</h1>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Percent /> Nossas Taxas
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="flex items-start gap-4">
+            <div className="flex-shrink-0 bg-primary/10 text-primary p-3 rounded-lg">
+              <TrendingUp className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="font-semibold">Taxa de Transação em Robôs</h3>
+              <p className="text-2xl font-bold">A partir de 5%</p>
+              <p className="text-sm text-muted-foreground">
+                Uma taxa de transação é aplicada sobre cada novo investimento. O valor varia por robô e é deduzido no momento da compra.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-start gap-4">
+            <div className="flex-shrink-0 bg-primary/10 text-primary p-3 rounded-lg">
+              <DollarSign className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="font-semibold">Taxa de Saque</h3>
+              <p className="text-2xl font-bold">2%</p>
+              <p className="text-sm text-muted-foreground">
+                Uma taxa de 2% é aplicada sobre o valor de cada saque solicitado. Esta taxa cobre os custos de processamento e da rede de criptomoedas (USDT TRC-20).
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="bg-secondary/50 border-border">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">Por que cobramos taxas?</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4 text-sm text-muted-foreground">
+          <p>
+            Nossas taxas são essenciais para garantir a sustentabilidade e a qualidade contínua da plataforma CryptoAI Miner. Elas nos permitem:
+          </p>
+          <div className="flex items-start gap-3">
+            <Cpu className="w-5 h-5 text-primary mt-1 flex-shrink-0" />
+            <span>
+              <strong>Manter e Evoluir a IA:</strong> Cobrir os altos custos de processamento e treinamento contínuo dos nossos robôs de inteligência artificial, garantindo que eles permaneçam eficientes e lucrativos.
+            </span>
+          </div>
+          <div className="flex items-start gap-3">
+            <ShieldCheck className="w-5 h-5 text-primary mt-1 flex-shrink-0" />
+            <span>
+              <strong>Garantir a Segurança:</strong> Investir em medidas de segurança robustas para proteger seus fundos e dados contra ameaças.
+            </span>
+          </div>
+          <p>
+            Acreditamos em total transparência, e essas taxas nos ajudam a oferecer a melhor e mais segura experiência de mineração para você.
+          </p>
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
+
+export default ReportsPage;

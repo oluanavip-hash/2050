@@ -1,0 +1,152 @@
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useAuth } from "@/contexts/AuthContext";
+import { getAchievementsProgress } from "@/services/achievementsService";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
+import { Trophy, Star, Award, Gift } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
+import { AchievementPrizeModal } from "@/components/AchievementPrizeModal";
+
+interface Prize {
+  imageUrl: string;
+  description: string;
+}
+
+interface AchievementLevel {
+  level: number;
+  name: string;
+  target: number;
+  icon: React.ReactNode;
+  prize: Prize;
+}
+
+const achievementLevels: AchievementLevel[] = [
+  {
+    level: 1,
+    name: "Ouro",
+    target: 10000,
+    icon: <Trophy className="text-yellow-500" />,
+    prize: {
+      imageUrl: "https://i.ibb.co/1YJ1NnBn/Generated-Image-September-30-2025-2-29-AM.png",
+      description: "Bônus de +R$2.500 no PIX!",
+    },
+  },
+  {
+    level: 2,
+    name: "Platina",
+    target: 50000,
+    icon: <Star className="text-purple-400" />,
+    prize: {
+      imageUrl: "https://i.ibb.co/PGQBzkQ6/Generated-Image-September-30-2025-2-28-AM.png",
+      description: "Bônus de +R$5.000 no PIX!",
+    },
+  },
+  {
+    level: 3,
+    name: "Diamante",
+    target: 100000,
+    icon: <Award className="text-blue-400" />,
+    prize: {
+      imageUrl: "https://i.ibb.co/CppRKrW1/Generated-Image-September-30-2025-2-20-AM.png",
+      description: "1 Viagem para Dubai com 1 acompanhante!",
+    },
+  },
+];
+
+const AchievementsPage = () => {
+  const { user, loading: authLoading } = useAuth();
+  const [selectedPrize, setSelectedPrize] = useState<{ prize: Prize; name: string; isCompleted: boolean } | null>(null);
+
+  const { data: progressData, isLoading } = useQuery({
+    queryKey: ["achievementsProgress", user?.id],
+    queryFn: () => getAchievementsProgress(user!.id),
+    enabled: !!user,
+  });
+
+  const loading = authLoading || isLoading;
+  const currentFaturamento = progressData?.totalFaturamento ?? 0;
+
+  return (
+    <div className="space-y-6">
+      <h1 className="text-2xl font-bold">Minhas Conquistas</h1>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Seu Progresso de Faturamento</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <Skeleton className="h-8 w-40" />
+          ) : (
+            <p className="text-3xl font-bold text-primary">
+              R$ {currentFaturamento.toFixed(2)}
+            </p>
+          )}
+          <p className="text-sm text-muted-foreground">Faturamento total acumulado.</p>
+        </CardContent>
+      </Card>
+
+      <div className="space-y-4">
+        {achievementLevels.map((item) => {
+          const progress = Math.min((currentFaturamento / item.target) * 100, 100);
+          const isCompleted = progress >= 100;
+          const remaining = Math.max(0, item.target - currentFaturamento);
+
+          return (
+            <Card key={item.level}>
+              <CardHeader>
+                <div className="flex justify-between items-center">
+                  <CardTitle className="flex items-center gap-2">
+                    {item.icon}
+                    {item.name}
+                  </CardTitle>
+                  {loading ? (
+                    <Skeleton className="h-9 w-28" />
+                  ) : (
+                    <Button 
+                      size="sm" 
+                      onClick={() => setSelectedPrize({ prize: item.prize, name: item.name, isCompleted })}
+                    >
+                      <Gift className="mr-2 h-4 w-4" />
+                      Prêmio
+                    </Button>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {loading ? (
+                  <>
+                    <Skeleton className="h-3 w-full" />
+                    <Skeleton className="h-4 w-3/4 mt-2" />
+                  </>
+                ) : (
+                  <>
+                    <Progress value={progress} className="h-3" />
+                    <div className="flex justify-between text-sm text-muted-foreground">
+                      <span>Progresso: {progress.toFixed(0)}%</span>
+                      {!isCompleted ? (
+                        <span>Faltam R$ {remaining.toFixed(2)}</span>
+                      ) : (
+                        <span className="text-primary font-semibold">Conquistado!</span>
+                      )}
+                    </div>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+
+      <AchievementPrizeModal
+        open={!!selectedPrize}
+        onOpenChange={() => setSelectedPrize(null)}
+        prizeInfo={selectedPrize}
+      />
+    </div>
+  );
+};
+
+export default AchievementsPage;

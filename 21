@@ -1,0 +1,227 @@
+import { useState } from "react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
+import { Copy } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+
+interface WalletDepositModalProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+export const WalletDepositModal = ({ open, onOpenChange }: WalletDepositModalProps) => {
+  const { user } = useAuth();
+  const [amount, setAmount] = useState("");
+  const [pixData, setPixData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const { toast } = useToast();
+
+  const handleCreatePixPayment = async () => {
+    const depositAmount = parseFloat(amount);
+    
+    if (isNaN(depositAmount) || depositAmount < 10) {
+      toast({
+        title: "Valor inválido",
+        description: "O valor mínimo para depósito é R$ 10,00",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!user) {
+      toast({
+        title: "Erro de autenticação",
+        description: "Sessão não encontrada. Por favor, faça login novamente.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('create-pix-payment', {
+        body: { 
+          amount: depositAmount,
+          robotName: "Depósito na Carteira",
+          userId: user.id
+        }
+      });
+      if (error) throw error;
+      setPixData(data);
+
+      toast({
+        title: "PIX gerado com sucesso!",
+        description: "Seu saldo será atualizado após a confirmação do pagamento.",
+      });
+
+    } catch (error: any) {
+      console.error('Erro ao criar pagamento PIX:', error);
+      toast({
+        title: "Erro ao gerar PIX",
+        description: error.message || "Tente novamente em alguns instantes",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const copyPixCode = async () => {
+    if (!pixData?.pixCode) return;
+    const textToCopy = pixData.pixCode;
+
+    // Modern clipboard API (preferred)
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(textToCopy);
+        toast({
+          title: "PIX copiado!",
+          description: "Código PIX copiado para a área de transferência.",
+        });
+        return; // Success, no need for fallback
+      } catch (err) {
+        console.warn("Falha ao usar a API Clipboard, tentando fallback:", err);
+      }
+    }
+
+    // Fallback method: select text from the visible input
+    const inputElement = document.getElementById('pix-code-input') as HTMLInputElement;
+    if (inputElement) {
+      inputElement.select();
+      inputElement.setSelectionRange(0, 99999); // For mobile devices
+
+      try {
+        const successful = document.execCommand('copy');
+        if (successful) {
+          toast({
+            title: "PIX copiado!",
+            description: "Código PIX copiado para a área de transferência.",
+          });
+        } else {
+          throw new Error('document.execCommand returned false');
+        }
+      } catch (copyErr) {
+        console.error("Falha ao copiar com o método de fallback:", copyErr);
+        toast({
+          title: "Erro ao copiar",
+          description: "Não foi possível copiar. Por favor, selecione e copie manually.",
+          variant: "destructive",
+        });
+      }
+
+      // Deselect text after attempting to copy
+      window.getSelection()?.removeAllRanges();
+    } else {
+      toast({
+        title: "Erro ao copiar",
+        description: "Não foi possível encontrar o campo de texto. Copie manualmente.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleClose = () => {
+    setAmount("");
+    setPixData(null);
+    onOpenChange(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={handleClose}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Depositar na Carteira</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          {!pixData ? (
+            <>
+              <div className="space-y-2">
+                <Label htmlFor="amount">Valor do Depósito</Label>
+                <Input
+                  id="amount"
+                  type="number"
+                  placeholder="Digite o valor (mínimo R$ 10)"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  min={10}
+                  step={0.01}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Valor mínimo: R$ 10,00
+                </p>
+              </div>
+
+              <Button 
+                onClick={handleCreatePixPayment} 
+                disabled={loading || !amount}
+                className="w-full"
+                size="lg"
+              >
+                {loading ? "Gerando PIX..." : "Gerar PIX"}
+              </Button>
+            </>
+          ) : (
+            <>
+              <div className="text-center">
+                <p className="text-2xl font-bold text-primary">
+                  R$ {parseFloat(amount).toFixed(2)}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Valor do depósito
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="text-sm font-medium">PIX Copia e Cola:</label>
+                  <div className="flex space-x-2 mt-1">
+                    <Input
+                      id="pix-code-input"
+                      value={pixData.pixCode || ""}
+                      readOnly
+                      className="font-mono text-xs"
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={copyPixCode}
+                    >
+                      <Copy className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                {pixData.qrCodeUrl && (
+                  <div className="text-center">
+                    <div className="bg-white p-4 rounded-lg border inline-block">
+                      <img 
+                        src={pixData.qrCodeUrl} 
+                        alt="QR Code PIX"
+                        className="w-32 h-32"
+                      />
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Escaneie o QR Code com seu banco
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <Button 
+                onClick={handleClose}
+                className="w-full"
+              >
+                Fechar
+              </Button>
+            </>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+};

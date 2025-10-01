@@ -1,0 +1,36 @@
+-- Adiciona a coluna para armazenar a moeda minerada
+ALTER TABLE public.investments
+ADD COLUMN coin_id TEXT;
+
+-- Recria a função purchase_robot para incluir o coin_id
+DROP FUNCTION IF EXISTS public.purchase_robot(uuid, text, numeric, integer);
+CREATE OR REPLACE FUNCTION public.purchase_robot(
+  p_user_id uuid,
+  p_robot_id text,
+  p_amount numeric,
+  p_period_days integer,
+  p_coin_id text -- Novo parâmetro
+)
+RETURNS TABLE (success boolean, message text)
+LANGUAGE plpgsql
+SECURITY DEFINER -- Executa com os privilégios do criador da função
+AS $$
+DECLARE
+  v_user_balance numeric;
+BEGIN
+  -- Obtém o saldo diretamente do perfil do usuário
+  SELECT balance INTO v_user_balance FROM public.profiles WHERE user_id = p_user_id;
+
+  -- Verifica se o saldo é suficiente
+  IF v_user_balance < p_amount THEN
+    RETURN QUERY SELECT false, 'Saldo insuficiente para realizar este investimento.';
+    RETURN;
+  END IF;
+
+  -- Insere o novo investimento, incluindo o coin_id
+  INSERT INTO public.investments (user_id, robot_id, amount, end_date, coin_id)
+  VALUES (p_user_id, p_robot_id, p_amount, now() + (p_period_days || ' days')::interval, p_coin_id);
+
+  RETURN QUERY SELECT true, 'Investimento realizado com sucesso!';
+END;
+$$;

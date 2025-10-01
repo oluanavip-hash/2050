@@ -1,0 +1,225 @@
+-- Remove todos os gatilhos e funções existentes para evitar conflitos
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+DROP FUNCTION IF EXISTS public.handle_new_user();
+
+DROP TRIGGER IF EXISTS on_first_deposit ON public.deposits;
+DROP FUNCTION IF EXISTS public.handle_first_deposit();
+
+DROP TRIGGER IF EXISTS update_balance_on_deposit ON public.deposits;
+DROP FUNCTION IF EXISTS public.update_balance_on_deposit();
+
+DROP TRIGGER IF EXISTS update_balance_on_investment ON public.investments;
+DROP FUNCTION IF EXISTS public.update_balance_on_investment();
+
+DROP TRIGGER IF EXISTS update_balance_on_withdrawal ON public.withdrawals;
+DROP FUNCTION IF EXISTS public.update_balance_on_withdrawal();
+
+DROP TRIGGER IF EXISTS update_balance_on_bonus ON public.referral_bonuses;
+DROP FUNCTION IF EXISTS public.update_balance_on_bonus();
+
+DROP FUNCTION IF EXISTS public.purchase_robot(uuid, text, numeric, integer);
+DROP FUNCTION IF EXISTS public.generate_referral_code();
+
+-- Recria a função para gerar código de referência com segurança
+CREATE OR REPLACE FUNCTION public.generate_referral_code()
+RETURNS TEXT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = 'public'
+AS $$
+DECLARE
+  new_code TEXT;
+  is_duplicate BOOLEAN;
+BEGIN
+  LOOP
+    new_code := upper(substr(md5(random()::text), 0, 9));
+    SELECT EXISTS (SELECT 1 FROM public.profiles WHERE referral_code = new_code) INTO is_duplicate;
+    IF NOT is_duplicate THEN
+      RETURN new_code;
+    END IF;
+  END LOOP;
+END;
+$$;
+
+-- Recria a função para criar um novo perfil de usuário com segurança
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = 'public'
+AS $$
+DECLARE
+  referrer_id UUID;
+  referral_code_input TEXT;
+BEGIN
+  -- Extrai o código de referência dos metadados do usuário
+  referral_code_input := NEW.raw_user_meta_data->>'referral_code';
+
+  -- Encontra o ID do usuário que indicou, se um código válido for fornecido
+  IF referral_code_input IS NOT NULL AND referral_code_input != '' THEN
+    SELECT user_id INTO referrer_id FROM public.profiles WHERE referral_code = referral_code_input;
+  END IF;
+
+  -- Insere o novo perfil
+  INSERT INTO public.profiles (user_id, email, full_name, cpf, phone, referred_by, referral_code)
+  VALUES (
+    NEW.id,
+    NEW.email,
+    NEW.raw_user_meta_data->>'full_name',
+    NEW.raw_user_meta_data->>'cpf',
+    NEW.raw_user_meta_data->>'phone',
+    referrer_id,
+    public.generate_referral_code()
+  );
+
+  -- Concede bônus de R$10 para o novo usuário por se cadastrar
+  INSERT INTO public.referral_bonuses (user_id, amount, reason)
+  VALUES (NEW.id, 10, 'Bônus de cadastro');
+
+  RETURN NEW;
+END;
+$$;
+
+-- Recria a função para lidar com o primeiro depósito com segurança
+CREATE OR REPLACE FUNCTION public.handle_first_deposit()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = 'public'
+AS $$
+DECLARE
+  referrer_profile RECORD;
+  deposit_count INT;
+BEGIN
+  -- Verifica se é o primeiro depósito do usuário
+  SELECT count(*) INTO deposit_count FROM public.deposits WHERE user_id = NEW.user_id;
+
+  IF deposit_count = 1 THEN
+    -- Encontra o perfil de quem indicou o novo usuário
+    SELECT p.user_id, p.referred_by INTO referrer_profile FROM public.profiles p WHERE p.user_id = NEW.user_id;
+
+    -- Se houver alguém que indicou, concede o bônus de R$10
+    IF referrer_profile.referred_by IS NOT NULL THEN
+      INSERT INTO public.referral_bonuses (user_id, amount, reason, source_user_id)
+      VALUES (referrer_profile.referred_by, 10, 'Bônus de indicação', NEW.user_id);
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+-- Recria as funções de atualização de saldo com segurança
+CREATE OR REPLACE FUNCTION public.update_balance_on_deposit()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = 'public'
+AS $$
+BEGIN
+  UPDATE public.profiles
+  SET balance = balance + NEW.amount
+  WHERE user_id = NEW.user_id;
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.update_balance_on_investment()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = 'public'
+AS $$
+BEGIN
+  UPDATE public.profiles
+  SET balance = balance - NEW.amount
+  WHERE user_id = NEW.user_id;
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.update_balance_on_withdrawal()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = 'public'
+AS $$
+BEGIN
+  UPDATE public.profiles
+  SET balance = balance - NEW.amount
+  WHERE user_id = NEW.user_id;
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.update_balance_on_bonus()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = 'public'
+AS $$
+BEGIN
+  UPDATE public.profiles
+  SET balance = balance + NEW.amount
+  WHERE user_id = NEW.user_id;
+  RETURN NEW;
+END;
+$$;
+
+-- Recria a função de compra de robô com segurança
+CREATE OR REPLACE FUNCTION public.purchase_robot(p_user_id uuid, p_robot_id text, p_amount numeric, p_period_days integer)
+RETURNS TABLE(success boolean, message text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = 'public'
+AS $$
+DECLARE
+  current_balance numeric;
+  transaction_fee numeric;
+  net_amount numeric;
+BEGIN
+  -- Busca o saldo diretamente do perfil do usuário
+  SELECT balance INTO current_balance FROM public.profiles WHERE user_id = p_user_id;
+
+  -- Calcula a taxa de transação (2.5%)
+  transaction_fee := p_amount * 0.025;
+  net_amount := p_amount - transaction_fee;
+
+  -- Verifica se o saldo é suficiente para o valor bruto
+  IF current_balance < p_amount THEN
+    RETURN QUERY SELECT false, 'Saldo insuficiente para realizar este investimento.';
+    RETURN;
+  END IF;
+
+  -- Insere o novo investimento com o valor líquido
+  INSERT INTO public.investments (user_id, robot_id, amount, end_date)
+  VALUES (p_user_id, p_robot_id, net_amount, now() + (p_period_days || ' days')::interval);
+
+  RETURN QUERY SELECT true, 'Investimento realizado com sucesso!';
+END;
+$$;
+
+-- Recria todos os gatilhos
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+CREATE TRIGGER on_first_deposit
+  AFTER INSERT ON public.deposits
+  FOR EACH ROW EXECUTE FUNCTION public.handle_first_deposit();
+
+CREATE TRIGGER update_balance_on_deposit
+  AFTER INSERT ON public.deposits
+  FOR EACH ROW EXECUTE FUNCTION public.update_balance_on_deposit();
+
+CREATE TRIGGER update_balance_on_investment
+  AFTER INSERT ON public.investments
+  FOR EACH ROW EXECUTE FUNCTION public.update_balance_on_investment();
+
+CREATE TRIGGER update_balance_on_withdrawal
+  AFTER INSERT ON public.withdrawals
+  FOR EACH ROW EXECUTE FUNCTION public.update_balance_on_withdrawal();
+
+CREATE TRIGGER update_balance_on_bonus
+  AFTER INSERT ON public.referral_bonuses
+  FOR EACH ROW EXECUTE FUNCTION public.update_balance_on_bonus();

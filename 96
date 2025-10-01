@@ -1,0 +1,150 @@
+import { useQuery } from "@tanstack/react-query";
+import { useAuth } from "@/contexts/AuthContext";
+import { getAffiliateSummary } from "@/services/affiliateService";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useToast } from "@/hooks/use-toast";
+import { Copy, Gift, Users, DollarSign } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+
+const AffiliatesPage = () => {
+  const { user, loading: authLoading } = useAuth();
+  const { toast } = useToast();
+
+  const { data: affiliateData, isLoading } = useQuery({
+    queryKey: ['affiliateSummary', user?.id],
+    queryFn: () => getAffiliateSummary(user!.id),
+    enabled: !!user,
+  });
+
+  const loading = authLoading || isLoading;
+  const referralCode = affiliateData?.referralCode || '';
+  const shareText = `🚀 Ganhe R$10 AGORA para começar a investir com inteligência artificial! 🤖💰\n\nQuer lucrar com criptomoedas de forma automatizada e inteligente? Comece agora com R$10 de bônus instantâneo!\n\n🔹 Use meu código de convite: ${referralCode}\n🔹 Cadastre-se no site: https://cryptoaiminer.com\n\n🔹 Faça seu primeiro depósito (qualquer valor!)\n🔹 E pronto: você e eu ganhamos R$10 na hora!\n\n💡 Os robôs de investimento trabalham por você 24h por dia. É a chance de colocar seu dinheiro para render com tecnologia de ponta!`;
+
+  const copyToClipboard = async (text: string) => {
+    if (!text) return;
+
+    try {
+      await navigator.clipboard.writeText(text);
+      toast({
+        title: "Copiado!",
+        description: "Texto copiado para a área de transferência.",
+      });
+    } catch (err) {
+      console.warn("Falha ao usar a API Clipboard, tentando fallback:", err);
+      const textArea = document.createElement("textarea");
+      textArea.value = text;
+      textArea.style.position = "fixed";
+      textArea.style.left = "-9999px";
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      try {
+        document.execCommand('copy');
+        toast({
+          title: "Copiado!",
+          description: "Texto copiado para a área de transferência.",
+        });
+      } catch (copyErr) {
+        console.error("Falha ao copiar texto:", copyErr);
+        toast({
+          title: "Erro ao copiar",
+          description: "Não foi possível copiar o texto. Por favor, copie manualmente.",
+          variant: "destructive",
+        });
+      } finally {
+        document.body.removeChild(textArea);
+      }
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <h1 className="text-2xl font-bold">Programa de Afiliados</h1>
+
+      <Card className="bg-primary/10 border-primary/20">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Gift className="text-primary"/> Convide e Ganhe</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-muted-foreground">
+            Convide seus amigos para a CryptoAI Miner. Quando eles se cadastrarem com seu código e fizerem o primeiro depósito, vocês dois ganham <span className="font-bold text-primary">R$10,00</span>!
+          </p>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Seu código de convite:</label>
+            <div className="flex gap-2">
+              {loading ? (
+                <Skeleton className="h-10 flex-grow" />
+              ) : (
+                <Input value={referralCode} readOnly />
+              )}
+              <Button size="icon" onClick={() => copyToClipboard(referralCode)} disabled={loading || !referralCode}>
+                <Copy className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+          <Button className="w-full" onClick={() => copyToClipboard(shareText)} disabled={loading || !referralCode}>
+            Copiar Texto de Divulgação
+          </Button>
+        </CardContent>
+      </Card>
+
+      <div className="grid md:grid-cols-3 gap-4">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Ganhos Totais</CardTitle>
+            <DollarSign className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            {loading ? <Skeleton className="h-8 w-24" /> : <div className="text-2xl font-bold">R$ {affiliateData?.totalEarnings.toFixed(2) || '0.00'}</div>}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Afiliados Ativos</CardTitle>
+            <Users className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            {loading ? <Skeleton className="h-8 w-16" /> : <div className="text-2xl font-bold">+{affiliateData?.activeReferrals || '0'}</div>}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Total de Afiliados</CardTitle>
+            <Users className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            {loading ? <Skeleton className="h-8 w-16" /> : <div className="text-2xl font-bold">{affiliateData?.totalReferrals || '0'}</div>}
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Seus Afiliados</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-3">
+            {loading ? (
+              Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)
+            ) : (affiliateData?.referrals?.length ?? 0) > 0 ? (
+              affiliateData?.referrals.map(ref => (
+                <div key={ref.id} className="flex items-center justify-between p-2 bg-secondary/50 rounded-md">
+                  <p className="text-sm text-muted-foreground">{ref.email}</p>
+                  <span className={`text-xs font-semibold px-2 py-1 rounded-full ${ref.status === 'Ativo' ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'}`}>
+                    {ref.status}
+                  </span>
+                </div>
+              ))
+            ) : (
+              <p className="text-center text-muted-foreground py-4">Você ainda não tem afiliados.</p>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
+
+export default AffiliatesPage;

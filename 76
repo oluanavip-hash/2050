@@ -1,0 +1,264 @@
+export type Json =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: Json | undefined }
+  | Json[]
+
+export type Database = {
+  public: {
+    Tables: {
+      deposits: {
+        Row: {
+          id: string
+          user_id: string
+          amount: number
+          status: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          amount: number
+          status?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          amount?: number
+          status?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "deposits_user_id_fkey"
+            columns: ["user_id"]
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      investments: {
+        Row: {
+          id: string
+          user_id: string
+          robot_id: string
+          amount: number
+          status: string
+          start_date: string
+          end_date: string
+          created_at: string
+          updated_at: string
+          coin_id: string | null
+          progress_override: number | null
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          robot_id: string
+          amount: number
+          status?: string
+          start_date?: string
+          end_date: string
+          created_at?: string
+          updated_at?: string
+          coin_id?: string | null
+          progress_override?: number | null
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          robot_id?: string
+          amount?: number
+          status?: string
+          start_date?: string
+          end_date?: string
+          created_at?: string
+          updated_at?: string
+          coin_id?: string | null
+          progress_override?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "investments_user_id_fkey"
+            columns: ["user_id"]
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      profiles: {
+        Row: {
+          user_id: string
+          email: string | null
+          full_name: string | null
+          cpf: string | null
+          phone: string | null
+          referral_code: string
+          referred_by: string | null
+          created_at: string
+          updated_at: string
+          balance: number
+          role: string
+        }
+        Insert: {
+          user_id: string
+          email?: string | null
+          full_name?: string | null
+          cpf?: string | null
+          phone?: string | null
+          referral_code?: string
+          referred_by?: string | null
+          created_at?: string
+          updated_at?: string
+          balance?: number
+          role?: string
+        }
+        Update: {
+          user_id?: string
+          email?: string | null
+          full_name?: string | null
+          cpf?: string | null
+          phone?: string | null
+          referral_code?: string
+          referred_by?: string | null
+          created_at?: string
+          updated_at?: string
+          balance?: number
+          role?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "profiles_referred_by_fkey"
+            columns: ["referred_by"]
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "profiles_user_id_fkey"
+            columns: ["user_id"]
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      referral_bonuses: {
+        Row: {
+          id: string
+          user_id: string
+          amount: number
+          reason: string
+          source_user_id: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          amount: number
+          reason: string
+          source_user_id?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          amount?: number
+          reason?: string
+          source_user_id?: string | null
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "referral_bonuses_source_user_id_fkey"
+            columns: ["source_user_id"]
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "referral_bonuses_user_id_fkey"
+            columns: ["user_id"]
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      withdrawals: {
+        Row: {
+          id: string
+          user_id: string
+          amount: number
+          destination: string
+          status: string
+          created_at: string
+          updated_at: string
+          method: string | null
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          amount: number
+          destination: string
+          status?: string
+          created_at?: string
+          updated_at?: string
+          method?: string | null
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          amount?: number
+          destination?: string
+          status?: string
+          created_at?: string
+          updated_at?: string
+          method?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "withdrawals_user_id_fkey"
+            columns: ["user_id"]
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      handle_first_deposit: {
+        Args: Record<PropertyKey, never>
+        Returns: unknown
+      }
+      handle_new_user: {
+        Args: Record<PropertyKey, never>
+        Returns: unknown
+      }
+      purchase_robot: {
+        Args: {
+          p_user_id: string
+          p_robot_id: string
+          p_amount: number
+          p_period_days: number
+          p_coin_id: string
+        }
+        Returns: {
+          success: boolean
+          message: string
+        }[]
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
+}

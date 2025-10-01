@@ -1,0 +1,107 @@
+-- Adiciona a coluna para o código de referência único
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS referral_code TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS profiles_referral_code_key ON public.profiles(referral_code);
+
+-- Função para gerar códigos aleatórios
+CREATE OR REPLACE FUNCTION generate_random_string(length integer)
+RETURNS text AS $$
+DECLARE
+  chars text[] := '{0,1,2,3,4,5,6,7,8,9,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z}';
+  result text := '';
+  i integer := 0;
+BEGIN
+  IF length < 0 THEN
+    RAISE EXCEPTION 'Given length cannot be less than 0';
+  END IF;
+  FOR i IN 1..length LOOP
+    result := result || chars[1+floor(random()*(array_length(chars, 1)-1))];
+  END LOOP;
+  RETURN result;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Popula o código de referência para usuários existentes que não o possuem
+DO $$
+DECLARE
+    r record;
+    new_code text;
+BEGIN
+    FOR r IN SELECT id FROM public.profiles WHERE referral_code IS NULL
+    LOOP
+        LOOP
+            new_code := generate_random_string(8);
+            EXIT WHEN NOT EXISTS (SELECT 1 FROM public.profiles WHERE referral_code = new_code);
+        END LOOP;
+        UPDATE public.profiles SET referral_code = new_code WHERE id = r.id;
+    END LOOP;
+END $$;
+
+
+-- Função de gatilho para criar um perfil de usuário e código de referência
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+DECLARE
+  new_referral_code TEXT;
+BEGIN
+  -- Gerar um código de referência único
+  LOOP
+    new_referral_code := generate_random_string(8);
+    EXIT WHEN NOT EXISTS (SELECT 1 FROM public.profiles WHERE referral_code = new_referral_code);
+  END LOOP;
+
+  INSERT INTO public.profiles (user_id, full_name, email, cpf, phone, referred_by, referral_code)
+  VALUES (
+    NEW.id,
+    NEW.raw_user_meta_data->>'full_name',
+    NEW.email,
+    NEW.raw_user_meta_data->>'cpf',
+    NEW.raw_user_meta_data->>'phone',
+    (NEW.raw_user_meta_data->>'referred_by')::uuid,
+    new_referral_code
+  );
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Gatilho que dispara a função acima quando um novo usuário se inscreve
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+-- Função para comprar um robô, garantindo que o usuário tenha saldo suficiente
+CREATE OR REPLACE FUNCTION public.purchase_robot(
+  p_user_id uuid,
+  p_robot_id text,
+  p_amount numeric,
+  p_period_days int
+)
+RETURNS TABLE (success boolean, message text)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_total_deposits numeric;
+  v_total_withdrawals numeric;
+  v_total_investments numeric;
+  v_current_balance numeric;
+BEGIN
+  -- Calcula o saldo atual
+  SELECT COALESCE(sum(amount), 0) INTO v_total_deposits FROM public.deposits WHERE user_id = p_user_id;
+  SELECT COALESCE(sum(amount), 0) INTO v_total_withdrawals FROM public.withdrawals WHERE user_id = p_user_id AND status = 'completed';
+  SELECT COALESCE(sum(amount), 0) INTO v_total_investments FROM public.investments WHERE user_id = p_user_id;
+  
+  v_current_balance := v_total_deposits - v_total_withdrawals - v_total_investments;
+
+  -- Verifica se o saldo é suficiente
+  IF v_current_balance < p_amount THEN
+    RETURN QUERY SELECT false, 'Saldo insuficiente para realizar este investimento.';
+    RETURN;
+  END IF;
+
+  -- Insere o novo investimento
+  INSERT INTO public.investments (user_id, robot_id, amount, end_date)
+  VALUES (p_user_id, p_robot_id, p_amount, now() + (p_period_days || ' days')::interval);
+  
+  RETURN QUERY SELECT true, 'Investimento realizado com sucesso!';
+END;
+$$;

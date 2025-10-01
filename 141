@@ -1,0 +1,37 @@
+/*
+  # [Operation Name]
+  Atualização da Tabela de Saques
+
+  ## Query Description: [Este script modifica a tabela 'withdrawals' para suportar múltiplos métodos de saque (PIX e USDT). Ele renomeia a coluna 'wallet_address' para 'destination' para ser mais genérica e adiciona uma nova coluna 'method' para armazenar o tipo de saque. Nenhuma perda de dados é esperada.]
+
+  ## Metadata:
+  - Schema-Category: "Structural"
+  - Impact-Level: "Low"
+  - Requires-Backup: false
+  - Reversible: true
+
+  ## Structure Details:
+  - Tabela 'withdrawals':
+    - Renomeia a coluna 'wallet_address' para 'destination'.
+    - Adiciona a coluna 'method' do tipo TEXT.
+
+  ## Security Implications:
+  - RLS Status: [Enabled]
+  - Policy Changes: [No]
+  - Auth Requirements: [N/A]
+
+  ## Performance Impact:
+  - Indexes: [No]
+  - Triggers: [No]
+  - Estimated Impact: [Baixo. A alteração é rápida e não deve impactar o desempenho geral.]
+*/
+
+-- Renomeia a coluna para um nome mais genérico
+ALTER TABLE public.withdrawals RENAME COLUMN wallet_address TO destination;
+
+-- Adiciona a coluna para o método de saque
+ALTER TABLE public.withdrawals ADD COLUMN method TEXT;
+
+-- Opcional: Adicionar um comentário na nova coluna para clareza
+COMMENT ON COLUMN public.withdrawals.method IS 'Método de saque, ex: ''pix'' ou ''usdt''';
+COMMENT ON COLUMN public.withdrawals.destination IS 'O destino do saque, como a chave PIX ou o endereço da carteira USDT.';

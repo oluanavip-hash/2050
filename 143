@@ -1,0 +1,110 @@
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { AuthModal } from "@/components/AuthModal";
+import { RobotCarousel } from "@/components/RobotCarousel";
+import { RobotModal } from "@/components/RobotModal";
+import { HowItWorksModal } from "@/components/HowItWorksModal";
+import { ChevronRight, User } from "lucide-react";
+import { Robot } from "@/data/robots";
+import { MemeCoinCarousel } from "@/components/MemeCoinCarousel";
+import { Footer } from "@/components/Footer";
+
+interface LandingPageProps {
+  onAuthSuccess: () => void;
+}
+
+export const LandingPage = ({ onAuthSuccess }: LandingPageProps) => {
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [selectedRobot, setSelectedRobot] = useState<Robot | null>(null);
+  const [showRobotModal, setShowRobotModal] = useState(false);
+  const [showHowItWorks, setShowHowItWorks] = useState(false);
+
+  const handleRobotClick = (robot: Robot) => {
+    setSelectedRobot(robot);
+    setShowRobotModal(true);
+  };
+
+  return (
+    <div className="min-h-screen bg-background text-white">
+      {/* Header */}
+      <header className="flex justify-between items-center p-4">
+        <div className="flex items-center space-x-2">
+          <img src="https://i.ibb.co/5hvRknkR/b4b4a7f9-739d-4461-ab16-63ca0cf3f668-removebg-preview.png" alt="CryptoAI Miner Logo" className="w-12 h-12" />
+          <div>
+            <h1 className="text-lg font-bold text-white">CryptoAI Miner</h1>
+            <p className="text-xs text-gray-400">Mineração Inteligente</p>
+          </div>
+        </div>
+        
+        <Button 
+          onClick={() => setShowAuthModal(true)}
+          className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold px-4 py-2 rounded-xl flex items-center gap-2"
+        >
+          <User className="w-4 h-4" />
+          Login
+        </Button>
+      </header>
+
+      {/* Main Content */}
+      <main className="p-4 space-y-8">
+        {/* Banner Section */}
+        <div className="rounded-3xl overflow-hidden shadow-lg shadow-primary/10">
+          <img 
+            src="https://i.ibb.co/7J2T91kJ/1000023765.gif" 
+            alt="Banner CryptoAI Miner" 
+            className="w-full h-auto object-cover"
+          />
+        </div>
+
+        {/* Signup CTA */}
+        <div className="bg-card rounded-3xl p-6">
+          <div className="flex justify-between items-center">
+            <div>
+              <h3 className="text-primary text-xl font-bold">
+                Cadastre-se grátis e<br />
+                ganhe R$10 de bônus 🎁
+              </h3>
+            </div>
+            <Button 
+              onClick={() => setShowAuthModal(true)}
+              className="bg-primary hover:bg-primary/90 text-primary-foreground w-12 h-12 rounded-xl"
+            >
+              <ChevronRight className="w-6 h-6" />
+            </Button>
+          </div>
+        </div>
+
+        {/* Robot Carousel */}
+        <div>
+          <h2 className="text-xl font-semibold mb-4 text-white px-2">Nossos Robôs de Mineração</h2>
+          <RobotCarousel onRobotClick={handleRobotClick} />
+        </div>
+
+        {/* MemeCoin Carousel */}
+        <div>
+          <h2 className="text-xl font-semibold mb-4 text-white px-2">Memecoins Mineradas</h2>
+          <MemeCoinCarousel />
+        </div>
+      </main>
+
+      <AuthModal 
+        open={showAuthModal}
+        onOpenChange={setShowAuthModal}
+        onAuthSuccess={onAuthSuccess}
+      />
+      
+      <RobotModal 
+        open={showRobotModal}
+        onOpenChange={setShowRobotModal}
+        robot={selectedRobot}
+      />
+      
+      <HowItWorksModal 
+        open={showHowItWorks}
+        onOpenChange={setShowHowItWorks}
+      />
+      
+      <Footer />
+    </div>
+  );
+};

@@ -1,0 +1,68 @@
+import { useCallback } from "react";
+import useEmblaCarousel from "embla-carousel-react";
+import { Button } from "@/components/ui/button";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import { robots as robotData, Robot } from "@/data/robots";
+
+interface RobotCarouselProps {
+  onRobotClick: (robot: Robot) => void;
+}
+
+export const RobotCarousel = ({ onRobotClick }: RobotCarouselProps) => {
+  const [emblaRef, emblaApi] = useEmblaCarousel({
+    loop: true,
+    align: "center",
+  });
+
+  const scrollPrev = useCallback(() => {
+    if (emblaApi) emblaApi.scrollPrev();
+  }, [emblaApi]);
+
+  const scrollNext = useCallback(() => {
+    if (emblaApi) emblaApi.scrollNext();
+  }, [emblaApi]);
+
+  return (
+    <div className="relative -mx-4">
+      <div className="overflow-hidden" ref={emblaRef}>
+        <div className="flex">
+          {robotData.map((robot) => (
+            <div
+              key={robot.id}
+              className="relative flex-[0_0_90%] sm:flex-[0_0_80%] md:flex-[0_0_60%] min-w-0 pl-4"
+            >
+              <div
+                className="overflow-hidden rounded-2xl cursor-pointer group relative shadow-lg shadow-primary/10"
+                onClick={() => onRobotClick(robot)}
+              >
+                <img
+                  src={robot.bannerImage}
+                  alt={robot.name}
+                  className="w-full h-auto object-cover transition-transform duration-300 group-hover:scale-105"
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <Button
+        onClick={scrollPrev}
+        className="absolute left-6 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/30 hover:bg-black/50 text-white border-none p-0 backdrop-blur-sm z-10 hidden"
+        size="icon"
+        aria-label="Anterior"
+      >
+        <ChevronLeft className="w-6 h-6" />
+      </Button>
+
+      <Button
+        onClick={scrollNext}
+        className="absolute right-6 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/30 hover:bg-black/50 text-white border-none p-0 backdrop-blur-sm z-10"
+        size="icon"
+        aria-label="Próximo"
+      >
+        <ChevronRight className="w-6 h-6" />
+      </Button>
+    </div>
+  );
+};

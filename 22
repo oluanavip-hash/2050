@@ -1,0 +1,163 @@
+import { useState } from "react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
+import { Label } from "./ui/label";
+import { useAuth } from "@/contexts/AuthContext";
+import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group";
+
+interface WithdrawDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  availableBalance: number;
+  onSuccess: () => void;
+}
+
+export const WithdrawDialog = ({ open, onOpenChange, availableBalance, onSuccess }: WithdrawDialogProps) => {
+  const { user } = useAuth();
+  const [amount, setAmount] = useState("");
+  const [destination, setDestination] = useState("");
+  const [method, setMethod] = useState<'pix' | 'usdt'>('pix');
+  const [isLoading, setIsLoading] = useState(false);
+  const { toast } = useToast();
+
+  const handleWithdraw = async () => {
+    const withdrawAmount = parseFloat(amount);
+    
+    if (isNaN(withdrawAmount) || withdrawAmount <= 0) {
+      toast({ title: "Valor inválido", description: "Digite um valor válido para saque", variant: "destructive" });
+      return;
+    }
+    
+    if (withdrawAmount > availableBalance) {
+      toast({ title: "Saldo insuficiente", description: "O valor do saque excede o saldo disponível.", variant: "destructive" });
+      return;
+    }
+
+    if (!destination.trim()) {
+      toast({ title: "Destino obrigatório", description: `Digite ${method === 'pix' ? 'sua chave PIX' : 'o endereço da sua carteira USDT (TRC-20)'}.`, variant: "destructive" });
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      if (!user) {
+        toast({ title: "Erro de Autenticação", description: "Você precisa estar logado para sacar.", variant: "destructive" });
+        return;
+      }
+
+      const { error } = await supabase.from('withdrawals').insert({
+        user_id: user.id,
+        amount: withdrawAmount,
+        destination: destination,
+        method: method,
+        status: 'pending'
+      });
+
+      if (error) throw error;
+
+      toast({
+        title: "Saque Solicitado com Sucesso!",
+        description: `Sua solicitação de saque de R$ ${withdrawAmount.toFixed(2)} foi enviada e será processada.`,
+      });
+      
+      setAmount("");
+      setDestination("");
+      onSuccess();
+      onOpenChange(false);
+
+    } catch (error: any) {
+      toast({
+        title: "Erro no Saque",
+        description: error.message || "Não foi possível processar seu saque. Tente novamente.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="w-[95vw] max-w-md">
+        <DialogHeader>
+          <DialogTitle>Solicitar Saque</DialogTitle>
+          <DialogDescription>
+            Selecione o método e preencha os dados para o saque.
+          </DialogDescription>
+        </DialogHeader>
+        
+        <div className="space-y-4">
+          <div className="text-center p-3 bg-secondary rounded-lg">
+            <p className="text-sm text-muted-foreground">Saldo Disponível para Saque</p>
+            <p className="text-xl font-bold">R$ {availableBalance.toFixed(2)}</p>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Modo de Retirada</Label>
+            <ToggleGroup 
+              type="single" 
+              defaultValue="pix" 
+              className="grid grid-cols-2"
+              onValueChange={(value: 'pix' | 'usdt') => {
+                if (value) setMethod(value);
+              }}
+            >
+              <ToggleGroupItem value="pix" aria-label="Toggle PIX">
+                PIX
+              </ToggleGroupItem>
+              <ToggleGroupItem value="usdt" aria-label="Toggle USDT">
+                USDT (TRC-20)
+              </ToggleGroupItem>
+            </ToggleGroup>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="amount">Valor do Saque (R$)</Label>
+            <Input
+              id="amount"
+              type="number"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="0.00"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="destination">
+              {method === 'pix' ? 'Chave PIX' : 'Endereço da Carteira USDT (TRC-20)'}
+            </Label>
+            <Input
+              id="destination"
+              value={destination}
+              onChange={(e) => setDestination(e.target.value)}
+              placeholder={method === 'pix' ? 'Email, CPF, telefone ou chave aleatória' : 'Seu endereço de carteira'}
+            />
+          </div>
+
+          <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 text-sm text-yellow-300">
+            <p>
+              <strong>Atenção:</strong> Uma taxa de 2% será aplicada sobre o valor do saque.
+            </p>
+          </div>
+
+          <div className="flex space-x-2">
+            <Button onClick={handleWithdraw} className="flex-1" disabled={isLoading}>
+              {isLoading ? "Processando..." : "Confirmar Saque"}
+            </Button>
+            <Button 
+              variant="outline" 
+              onClick={() => onOpenChange(false)}
+              className="flex-1"
+              disabled={isLoading}
+            >
+              Cancelar
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+};

@@ -1,0 +1,81 @@
+/*
+# [Operation Name]
+Recriar a função `purchase_robot` com a assinatura correta.
+
+## Query Description: [Esta operação irá remover versões antigas da função `purchase_robot` para evitar conflitos e criar uma nova versão que aceita `p_user_id`, `p_robot_id` e `p_amount` como argumentos. Isso alinha a função do banco de dados com a chamada do frontend, corrigindo o erro "function does not exist". Não há risco de perda de dados, pois apenas a definição da função está sendo alterada.]
+
+## Metadata:
+- Schema-Category: ["Structural"]
+- Impact-Level: ["Low"]
+- Requires-Backup: [false]
+- Reversible: [true]
+
+## Structure Details:
+[A função `public.purchase_robot` será recriada.]
+
+## Security Implications:
+- RLS Status: [N/A]
+- Policy Changes: [No]
+- Auth Requirements: [A função usará `security definer` para verificar o saldo do usuário com segurança.]
+
+## Performance Impact:
+- Indexes: [N/A]
+- Triggers: [N/A]
+- Estimated Impact: [Nenhum impacto de performance esperado.]
+*/
+
+-- Remove versões conflitantes da função para evitar erros.
+drop function if exists public.purchase_robot(text, numeric);
+drop function if exists public.purchase_robot(uuid, text, numeric, int);
+drop function if exists public.purchase_robot(uuid, text, numeric);
+
+-- Cria a nova função com a assinatura correta (uuid, text, numeric)
+create or replace function public.purchase_robot(
+  p_user_id uuid,
+  p_robot_id text,
+  p_amount numeric
+)
+returns table (success boolean, message text)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_robot_details record;
+  v_total_deposits numeric;
+  v_total_withdrawals numeric;
+  v_total_investments numeric;
+  v_total_bonuses numeric;
+  v_current_balance numeric;
+begin
+  -- Busca os detalhes do robô. Em uma aplicação real, isso viria de uma tabela 'robots'.
+  select * into v_robot_details from json_to_recordset('[
+      {"id": "1", "period": 30}, {"id": "2", "period": 45}, {"id": "3", "period": 45}, {"id": "4", "period": 45}, {"id": "5", "period": 45}
+  ]') as x(id text, period int) where id = p_robot_id;
+
+  if not found then
+    return query select false, 'Robô não encontrado.';
+    return;
+  end if;
+
+  -- Calcula o saldo atual do usuário de forma segura.
+  select coalesce(sum(amount), 0) into v_total_deposits from public.deposits where user_id = p_user_id;
+  select coalesce(sum(amount), 0) into v_total_withdrawals from public.withdrawals where user_id = p_user_id and status = 'completed';
+  select coalesce(sum(amount), 0) into v_total_investments from public.investments where user_id = p_user_id;
+  select coalesce(sum(amount), 0) into v_total_bonuses from public.referral_bonuses where user_id = p_user_id;
+  
+  v_current_balance := (v_total_deposits + v_total_bonuses) - v_total_withdrawals - v_total_investments;
+
+  -- Verifica se o saldo é suficiente.
+  if v_current_balance < p_amount then
+    return query select false, 'Saldo insuficiente. Deposite mais fundos para realizar este investimento.';
+    return;
+  end if;
+
+  -- Insere o novo investimento.
+  insert into public.investments (user_id, robot_id, amount, end_date)
+  values (p_user_id, p_robot_id, p_amount, now() + (v_robot_details.period || ' days')::interval);
+
+  return query select true, 'Investimento realizado com sucesso!';
+end;
+$$;
